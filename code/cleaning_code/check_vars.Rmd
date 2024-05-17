@@ -1,0 +1,398 @@
+---
+title: "check_vars"
+author: "Hanmeng Xu"
+date: "2024-05-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(readxl)
+library(reactable)
+library(ggplot2)
+library(stringr)
+
+
+fig.counter <- 1
+tab.counter <- 1
+```
+
+### Table `r tab.counter`. StudyID
+```{r}
+tab.counter <- tab.counter + 1
+# read in data from onedrive shared folder 
+df <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_deid_2024_may.xlsx", sheet = "Dataset")
+
+n_unique <- length(unique(df$StudyID))
+n_single_test <- df %>% group_by(StudyID) %>% count() %>% filter(n==1) %>% nrow()
+n_multi_test <- df %>% group_by(StudyID) %>% count() %>% filter(n>1) %>% nrow()
+
+df %>% group_by(StudyID) %>% count() %>% group_by(n) %>% count() %>% rename(`Times tested` = n, n_patients = nn) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+```
+
+There are `r n_unique` patients in the original main dataset. There are `r n_single_test` patients tested only once, and `r n_multi_test` patients were tested more than once. 
+
+<br.
+
+### Figure `r fig.counter`. Display age at testing and remove records above 1 yo.
+Remove records with (collection date - DOB) > 12 months.
+```{r}
+fig.counter <- fig.counter + 1
+
+df <- df %>% mutate(age_at_test_in_days = as.numeric(as.Date(`Collection Date`) - as.Date(DOB))) %>% 
+  mutate(age_at_test_in_months = round(age_at_test_in_days / (365/12), 1))
+
+n_above1yo <- df %>% filter(age_at_test_in_months > 12) %>% nrow()
+
+df %>% 
+  ggplot() +
+  geom_histogram(aes(x = age_at_test_in_months), binwidth = 1, color = "black", fill = "white") +
+  geom_vline(xintercept = 12, color = "red")
+
+# remove > 12 months 
+df <- df %>% filter(age_at_test_in_months <= 12)
+```
+
+There are `r n_above1yo` testing records having age > 12 months at the time of testing. Remove these records from current dataset.
+
+
+
+
+<br>
+
+### Table `r tab.counter`. StudyID
+```{r}
+tab.counter <- tab.counter + 1
+# after removing > 12 months records 
+n_unique <- length(unique(df$StudyID)) 
+n_single_test <- df %>% group_by(StudyID) %>% count() %>% filter(n==1) %>% nrow()
+n_multi_test <- df %>% group_by(StudyID) %>% count() %>% filter(n>1) %>% nrow()
+
+# tested many times 
+id_multi_tests <- (df %>% group_by(StudyID) %>% count() %>% filter(n > 1))$StudyID # those who had multiple tests
+id_5tests <- (df %>% group_by(StudyID) %>% count() %>% filter(n == 5))$StudyID
+id_6tests <- (df %>% group_by(StudyID) %>% count() %>% filter(n == 6))$StudyID
+
+# unique ids 
+id_unique <- (df %>% group_by(StudyID) %>% count())$StudyID 
+
+df %>% group_by(StudyID) %>% count() %>% group_by(n) %>% count() %>% rename(`Times tested` = n, n_patients = nn) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+
+After removing records > 12 months at testing, there are `r n_unique` patients in the dataset. There are `r n_single_test` patients tested only once, and `r n_multi_test` patients were tested more than once. 
+
+StudyID for those who tested 5 timese: `r id_5tests`.
+StudyID for those who tested 6 timese: `r id_6tests`.
+
+```{r}
+df.multi.test <- df %>% filter(StudyID %in% id_multi_tests) %>% arrange(StudyID, `Collection Date`)
+```
+
+
+
+<br>
+
+### Figure `r fig.counter` Collection Date (sample collection date)
+```{r}
+fig.counter <- fig.counter + 1
+
+df <- df %>% mutate(collection_date = as.Date(`Collection Date`))
+#sum(is.na(df$collection_date)) # no missing for sample collection date
+max_cd <- max(df$collection_date)
+min_cd <- min(df$collection_date)
+
+df %>% ggplot() +
+  geom_histogram(aes(x = collection_date), color="black", fill="white") +
+  scale_x_date(date_breaks = "1 month") + theme_classic()
+
+
+# check if collection date is before DOB
+# df %>% filter(`Collection Date` < DOB) # n = 0
+```
+
+Sample collection date: `r min_cd` ~ `r max_cd`.
+
+<br>
+
+### Viral test, Resp Result, Viral detected: 
+From these variables, generate variables indicating whether this record was tested for certain virus, and the results for certain virus.
+```{r}
+# generate "whether tested" variables 
+df <- df %>% 
+  mutate(tested_flu = ifelse(`Viral test` %in% c("INFLUENZA A+B/RSV BY RT-PCR [LAB11021]",
+                                                  "SARS-COV-2 (COVID-19)/INFLUENZA A+B/RSV BY RT-PCR (BH GH LMW YH) [LAB11020]",
+                                                  "RESPIRATORY VIRUS PCR PANEL  (YH VERIGENE)(LAB ORDER ONLY) [LAB10852]",
+                                                  "ZZZINFLUENZA/RSV PCR      (BH) [LAB9626]",
+                                                  "RESPIRATORY VIRUS PCR PANEL     (BH GH LMW Q YH) [LAB3444]"), 1, 0)) %>% 
+  mutate(tested_rhino = ifelse(`Viral test` %in% c("RESPIRATORY VIRUS PCR PANEL  (YH VERIGENE)(LAB ORDER ONLY) [LAB10852]",
+                                                   "RESPIRATORY VIRUS PCR PANEL     (BH GH LMW Q YH) [LAB3444]"), 1, 0)) %>%
+  mutate(tested_hmpv = ifelse(`Viral test` %in% c("RESPIRATORY VIRUS PCR PANEL  (YH VERIGENE)(LAB ORDER ONLY) [LAB10852]",
+                                                  "RESPIRATORY VIRUS PCR PANEL     (BH GH LMW Q YH) [LAB3444]"), 1, 0)) %>%
+  mutate(tested_adeno = ifelse(`Viral test` %in% c("RESPIRATORY VIRUS PCR PANEL  (YH VERIGENE)(LAB ORDER ONLY) [LAB10852]",
+                                                   "RESPIRATORY VIRUS PCR PANEL     (BH GH LMW Q YH) [LAB3444]"), 1, 0)) %>%
+  mutate(tested_parainfluenza = ifelse(`Viral test` %in% c("RESPIRATORY VIRUS PCR PANEL  (YH VERIGENE)(LAB ORDER ONLY) [LAB10852]",
+                                                           "RESPIRATORY VIRUS PCR PANEL     (BH GH LMW Q YH) [LAB3444]"), 1, 0)) %>%
+  mutate(tested_rsv = ifelse(`Viral test` %in% c("INFLUENZA A+B/RSV BY RT-PCR [LAB11021]",
+                                                "SARS-COV-2 (COVID-19)/INFLUENZA A+B/RSV BY RT-PCR (BH GH LMW YH) [LAB11020]",
+                                                "RESPIRATORY VIRUS PCR PANEL  (YH VERIGENE)(LAB ORDER ONLY) [LAB10852]",
+                                                "ZZZINFLUENZA/RSV PCR      (BH) [LAB9626]",
+                                                "ZZZRESPIRATORY SYNCYTIAL VIRUS, RAPID ANTIGEN     (GH) [LAB3465]",
+                                                "RESPIRATORY VIRUS PCR PANEL     (BH GH LMW Q YH) [LAB3444]",
+                                                "ZZZRESPIRATORY SYNCYTIAL VIRUS BY RT-PCR (GH) [LAB3438]"), 1, 0))
+  
+
+# generate binary variables for testing results 
+df <- df %>% 
+  mutate(positive_fluA = case_when(tested_flu == 1 & str_detect(`Virus detected`, "Influenza A") == TRUE ~ 1,
+                                   tested_flu == 1 & (str_detect(`Virus detected`, "Influenza A") == FALSE | 
+                                                        is.na(`Virus detected`))  ~ 0)) %>%
+  mutate(positive_fluB = case_when(tested_flu == 1 & str_detect(`Virus detected`, "Influenza B") == TRUE ~ 1,
+                                   tested_flu == 1 & (str_detect(`Virus detected`, "Influenza B") == FALSE | 
+                                                        is.na(`Virus detected`))  ~ 0)) %>%
+  mutate(positive_flu = ifelse(positive_fluA == 1 | positive_fluB == 1, 1, 0)) %>% 
+  mutate(positive_rhino = case_when(tested_rhino == 1 & str_detect(`Virus detected`, "Rhinovirus") == TRUE ~ 1,
+                                    tested_rhino == 1 & (str_detect(`Virus detected`, "Rhinovirus") == FALSE | 
+                                                        is.na(`Virus detected`))  ~ 0)) %>%
+  mutate(positive_hmpv = case_when(tested_hmpv == 1 & str_detect(`Virus detected`, "HMPV") == TRUE ~ 1,
+                                   tested_hmpv == 1 & (str_detect(`Virus detected`, "HMPV") == FALSE | 
+                                                        is.na(`Virus detected`))  ~ 0)) %>%
+  mutate(positive_adeno = case_when(tested_adeno == 1 & str_detect(`Virus detected`, "Adenovirus") == TRUE ~ 1,
+                                    tested_adeno == 1 & (str_detect(`Virus detected`, "Adenovirus") == FALSE | 
+                                                        is.na(`Virus detected`))  ~ 0)) %>%
+  mutate(positive_parainfluenza = case_when(tested_parainfluenza == 1 & str_detect(`Virus detected`, "Parainfluenza") == TRUE ~ 1,
+                                            tested_parainfluenza == 1 & (str_detect(`Virus detected`, "Parainfluenza") == FALSE | 
+                                                                is.na(`Virus detected`))  ~ 0)) %>%
+  mutate(positive_rsv = case_when(tested_rsv == 1 & str_detect(`Virus detected`, "Syncytial") == TRUE ~ 1,
+                                  tested_rsv == 1 & (str_detect(`Virus detected`, "Syncytial") == FALSE | 
+                                                                is.na(`Virus detected`))  ~ 0))
+
+# variable listing all viruses tested
+df <- cbind.data.frame(df,
+    tested_viruses = apply(df, 1, function(x)
+        paste(colnames(df[ , grepl( "tested_", names(df))])[ x[grepl( "tested_", names(x))] == 1 ], collapse = " "))) %>% 
+  mutate(tested_viruses = str_replace_all(tested_viruses, "tested_", ""))
+
+
+# variable listing all viruses detected 
+df <- cbind.data.frame(df,
+    positive_viruses = apply(df %>% 
+                               mutate(across(positive_fluA:positive_rsv, ~ as.character(.x))) %>% 
+                               mutate(across(positive_fluA:positive_rsv,  ~ replace_na(.x, "NA"))), 1, function(x)
+        paste(colnames(df[ , grepl( "positive_", names(df))])[ x[grepl( "positive_", names(x))] == 1 ], collapse = " "))) %>% 
+  mutate(positive_viruses = str_replace_all(positive_viruses, "positive_", "")) %>% 
+  mutate(positive_viruses = str_replace_all(positive_viruses, "NA", "")) %>% 
+  mutate(positive_viruses = str_replace(positive_viruses, " flu", "")) %>% 
+  mutate(positive_viruses = ifelse(positive_viruses == "", NA, positive_viruses))
+
+```
+
+### Table `r tab.counter`. Viral test
+```{r}
+tab.counter <- tab.counter + 1
+# briefly summarize testing
+df %>% 
+  group_by(tested_viruses) %>% count() %>% arrange(desc(n)) %>% rename(n_records = n) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+```
+
+This table shows the number of testing records (w/ duplicates) that took certain tests, some viruses are not included here.
+
+<br>
+
+### Table `r tab.counter`. Viral test results (by virus combo)
+```{r}
+tab.counter <- tab.counter + 1
+
+df %>% 
+  group_by(positive_viruses) %>% count() %>% arrange(desc(n)) %>% rename(n_records = n) %>% 
+  mutate(positive_viruses = ifelse(is.na(positive_viruses), "NO detection of any viruses", positive_viruses)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+<br>
+
+### Table `r tab.counter`. Viral test results (by single virus)
+```{r}
+tab.counter <- tab.counter + 1
+
+data.frame(
+  fluA = nrow(df %>% filter(positive_fluA == 1)),
+  fluB = nrow(df %>% filter(positive_fluB == 1)),
+  rhino = nrow(df %>% filter(positive_rhino == 1)),
+  hmpv = nrow(df %>% filter(positive_hmpv == 1)),
+  adeno = nrow(df %>% filter(positive_adeno == 1)),
+  parainfluenza = nrow(df %>% filter(positive_parainfluenza == 1)),
+  rsv = nrow(df %>% filter(positive_rsv == 1)),
+  `No detection` = nrow(df %>% filter(is.na(positive_viruses)))
+) %>% pivot_longer(cols = 1:8, names_to = "Virus", values_to = "n_records") %>% 
+  arrange(desc(n_records)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+  
+```
+
+<br>
+
+### Table `r tab.counter`. Admit Date
+```{r}
+tab.counter <- tab.counter + 1
+ 
+df %>% 
+  mutate(days_btw_admit_collect = as.Date(`Collection Date`) - as.Date(`Admit Date`)) %>%
+  group_by(days_btw_admit_collect ) %>% count() %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+# those admitted after sample collection
+temp <- df %>% mutate(days_btw_admit_collect = as.numeric(as.Date(`Collection Date`) - as.Date(`Admit Date`))) %>% 
+  filter(days_btw_admit_collect  < 0) %>% arrange(StudyID, `Collection Date`)
+
+# those with long interval between admission and sample collection
+temp <- df %>% mutate(days_btw_admit_collect = as.numeric(as.Date(`Collection Date`) - as.Date(`Admit Date`))) %>% 
+  filter(days_btw_admit_collect  >= 90) %>% arrange(StudyID, `Collection Date`)
+
+# df %>% select(`Collection Date`,`Admit Date`, `Encounter Type`) %>% 
+#   filter(as.Date(`Collection Date`) != as.Date(`Admit Date`))
+
+```
+
+<br>
+
+
+### Table `r tab.counter`. Hosp LOS
+```{r}
+tab.counter <- tab.counter + 1
+
+df %>%  count(`Hosp LoS`) %>% reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+### Table `r tab.counter`. Collection Department & Admission location
+Recode these two to sample_source variable:
+  * if Admission Location is available, use Admission Location;
+  * if Admission Location is not available, use Collection Department.
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>% 
+  mutate(sample_source = `Admission Location`) %>%
+  mutate(sample_source = case_when(is.na(sample_source) ~ `Collection Department`,
+                                   TRUE ~ sample_source))
+
+df %>% group_by(sample_source) %>% count() %>% arrange(desc(n)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+```
+
+
+<br>
+### Table `r tab.counter`. Original Encounter type
+```{r}
+df %>% group_by(`Encounter Type`) %>% count() %>% arrange(desc(n)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+<br>
+
+### Table `r tab.counter`. Missing Encounter type 
+There are 35 missings for original "encounter type" variable: How to classify encounter type for these? (TBC)
+```{r}
+tab.counter <- tab.counter + 1
+
+df %>% select(StudyID, `Collection Department`, `Admission Location`, `Encounter Type`) %>%
+  filter(is.na(`Encounter Type`)) %>% 
+  arrange(`Admission Location`) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+<br>
+
+### Table `r tab.counter`. Aggregate "Encounter Type" to fewer categories (new var: encounter_type) (TBC)
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>% 
+  mutate(encounter_type = case_when(`Encounter Type` == "Emergency" ~ "outpatient",
+                                    `Encounter Type` == "Inpatient" ~ "inpatient",
+                                    `Encounter Type` == "Specimen" ~ "outpatient",
+                                    `Encounter Type` == "Observation" ~ "inpatient",
+                                    `Encounter Type` == "Newborn" ~ "inpatient",
+                                    `Encounter Type` == "Outpatient" ~ "outpatient",
+                                    `Encounter Type` == "Hospital Outpatient Surgery" ~ "outpatient"))
+
+df %>% count(encounter_type) %>% rename(n_records = n) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+  
+```
+
+<br>
+
+### Table `r tab.counter`. ICU admission date
+Generated new variables:
+    + date_icu_admit: the same as ICU Admission Date, N/A as NA;
+    + days_btw_collection_icu: days between sample collection and ICU admission.
+    + date_icu_admit_related: ICU admission that can be linked with the testing result (within a week of testing? TBC)
+    + icu_admitted_related: whether the icu can be related to the testing result.
+  
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>% 
+  mutate(date_icu_admit = as.Date(`ICU Admission Date`, "%m/%d/%Y")) %>%
+  mutate(days_btw_collection_icu = as.numeric(as.Date(`Collection Date`) - date_icu_admit)) %>% 
+  mutate(date_icu_admit_related = case_when(days_btw_collection_icu <= 7 ~ date_icu_admit)) %>%
+  mutate(icu_admitted_related = case_when(!is.na(date_icu_admit_related) ~ 1,
+                                          !is.na(date_icu_admit) & is.na(date_icu_admit_related) ~ 0))
+
+df %>% count(days_btw_collection_icu) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+n_icu <- nrow(df %>% filter(!is.na(date_icu_admit))) # total ICU admissions 
+n_icu_unrelated <- nrow(df %>% filter(days_btw_collection_icu > 7))
+```
+
+Out of `r n_icu` ICU admissions, `r n_icu_unrelated` have ICU admission more than 7 days before or after sample collection date. We assume that these are ICU admissions that are not related to the testing result. Then the left ICU admissions:
+
+### Figure `r fig.counter`. 
+```{r}
+fig.counter <- fig.counter + 1
+
+df %>% 
+  ggplot() + 
+  geom_histogram(aes(x = date_icu_admit_related), color = "black", fill = "white") + theme_classic()
+```
+
+<br>
+
+### ICU LOS
+The original data was in XXd XXh. Generate new variables:
+    * icu_los_hours (unit: hour)
+    * icu_los_days (unit: day)
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
