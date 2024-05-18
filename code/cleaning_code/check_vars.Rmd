@@ -43,7 +43,8 @@ There are `r n_unique` patients in the original main dataset. There are `r n_sin
 <br.
 
 ### Figure `r fig.counter`. Display age at testing and remove records above 1 yo.
-Remove records with (collection date - DOB) > 12 months.
+  * Remove records with (collection date - DOB) > 12 months.
+  * Generated age_at_testing_in_days, age_at_testing_in_months.
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -53,7 +54,7 @@ df <- df %>% mutate(age_at_test_in_days = as.numeric(as.Date(`Collection Date`) 
 n_above1yo <- df %>% filter(age_at_test_in_months > 12) %>% nrow()
 
 df %>% 
-  ggplot() +
+  ggplot() + theme_classic() +
   geom_histogram(aes(x = age_at_test_in_months), binwidth = 1, color = "black", fill = "white") +
   geom_vline(xintercept = 12, color = "red")
 
@@ -98,11 +99,39 @@ StudyID for those who tested 6 timese: `r id_6tests`.
 df.multi.test <- df %>% filter(StudyID %in% id_multi_tests) %>% arrange(StudyID, `Collection Date`)
 ```
 
+<br> 
 
+### Table `r tab.counter` Sex 
+recode unknown to NA.
+```{r}
+tab.counter <- tab.counter + 1
+
+df %>%  count(Sex) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+df <- df %>% 
+  mutate(Sex = ifelse(Sex == "Unknown", NA, Sex))
+
+```
+
+<br>
+
+### Sex & Age at testing (after removing > 1 yo records )
+```{r}
+df %>% select(age_at_test_in_months, Sex) %>%
+  mutate(age = round(age_at_test_in_months)) %>%
+  group_by(Sex, age) %>% count() %>% 
+  mutate(n = ifelse(Sex == "Female", -n, n)) %>%
+  ggplot() +
+  geom_col(aes(x = age, y = n, fill = Sex)) + coord_flip() +
+  ylab("Age at testing (months)") + theme_classic()
+
+```
 
 <br>
 
 ### Figure `r fig.counter` Collection Date (sample collection date)
+Generate collection_date (Date class varaible).
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -371,18 +400,160 @@ df %>%
 
 <br>
 
-### ICU LOS
+### Figure `r fig.counter`. ICU LOS
 The original data was in XXd XXh. Generate new variables:
     * icu_los_hours (unit: hour)
     * icu_los_days (unit: day)
 ```{r}
+fig.counter <- fig.counter + 1
+
+df <- df %>% 
+  mutate(icu_los_hours = case_when( 
+                                    str_detect(`ICU LOS`, "h") == FALSE & str_detect(`ICU LOS`, "d") == TRUE ~
+                                      as.numeric(str_remove(`ICU LOS`, "d")) * 24,
+                                    str_detect(`ICU LOS`, "h") == TRUE & str_detect(`ICU LOS`, "d") == FALSE ~ 
+                                      as.numeric(str_remove(`ICU LOS`, "h")),
+                                    str_detect(`ICU LOS`, "h") == TRUE & str_detect(`ICU LOS`, "d") == TRUE ~ 
+                                      parse_number(`ICU LOS`) * 24 + as.numeric(str_remove(gsub(".* ", "", `ICU LOS`), "h")),
+                                    str_detect(`ICU LOS`, "m") == TRUE ~ 
+                                      as.numeric(str_remove(`ICU LOS`, "m")) * 30
+                                  )) %>%
+  mutate(icu_los_days = icu_los_hours / 24)
+
+
+df %>%
+  filter(icu_admitted_related == 1) %>%
+  ggplot() + ggtitle("Only plotting ICU admissions related to the testing results") +
+  geom_histogram(aes(x = icu_los_days), color = "black", fill = "white")  + theme_classic()
+```
+
+Several infants with ICU LOS longer than 1 month: 
+
+```{r}
+df %>% filter(icu_admitted_related == 1) %>% filter(icu_los_days > 30)%>% 
+  select(StudyID, `Collection Date`, date_icu_admit_related, icu_los_days) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+  
+```
+
+<br>
+
+### Figure `r fig.counter`. Gest age 
+(~ 700 missings)
+```{r}
+fig.counter <- fig.counter + 1
+
+df %>% 
+  ggplot() + geom_histogram(aes(x = `Gest Age`), binwidth = 1, color = "black", fill = "white") + theme_classic()
+  
+```
+Generate classification of gest age: gest_age_cat
+ *	>=42: post term
+ *	41: late term
+ *  39-40: full term
+ *  37-38: early term
+ *	< 37: preterm
+ 
+### Table `r tab.counter`.
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>%
+  mutate(gest_age_cat = case_when( `Gest Age` >= 42 ~ "post term",
+                                    `Gest Age` == 41 ~ "late term",
+                                    `Gest Age` == 39 | `Gest Age` == 40 ~ "full term",
+                                    `Gest Age`== 37 | `Gest Age` == 38 ~ "early term",
+                                    `Gest Age` < 37 ~ "preterm")) 
+  
+df %>% count(gest_age_cat) %>% arrange(desc(n)) %>% rename(n_records = n) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 
 ```
 
+<br>
+
+### Figure `r fig.counter`. Birth weight
+  * PENDING: Generate birth_weight_kg (numeric), low_birth_weight (binary). Low birth weight (LBW) is defined as a birth weight of less than 2500 g (up to and including 2499 g), as per the World Health Organization (WHO).
+  * what is the unit of original variable Birth Wgt? Haven't generated new variables.
+```{r}
+fig.counter <- fig.counter + 1
+
+df %>% 
+  mutate(birth_weight = as.numeric(`Birth Wgt`)) %>%
+  ggplot() +
+  geom_histogram(aes(x = birth_weight), color = "black", fill = "white") + theme_classic()
+```
+<br>
+
+### Race and Ethnicity (PENDING)
+There are many conflicting answers.
+```{r}
+df %>% count(Race) %>% arrange(desc(n)) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+```{r}
+df %>% count(Ethnicity) %>% arrange(desc(n)) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+<br>
+
+### Primary Insurance & Payor
+Generate new variable insurance_type (TBC)
+  *	Medicare / Medicaid --> public insurance 
+  *	All others --> private insurance 
+  *	Who are considered as “uninsured”? (patients having NA for both? n = 17)
+```{r}
+df <- df %>% 
+  mutate(insurance_concat = paste(`Primary Insurance`, Payor)) %>% 
+  mutate(insurance_type = case_when(str_detect(insurance_concat, "MEDICAID") | str_detect(insurance_concat, "MEDICARE") ~ "public",
+                                    insurance_concat == "NA NA" ~ "uninsured",
+                                    TRUE ~ "private")) %>%
+  select(-insurance_concat)
 
 
+df %>% count(insurance_type) %>% arrange(desc(n)) %>% rename(n_records = n) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
 
+<br>
 
+### Table `r tab.counter`. Fever?
+Displays whether the patient had a fever according to the NHSN definition (>38 C) within three days of the collection date. The information appears as a Yes or a No.
+```{r}
+tab.counter <- tab.counter + 1
+
+df %>% count(`Fever?`) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+<br>
+
+### Table `r tab.counter`. Temp
+The most recent flowsheet data for temperature. Convert to new variable recent_temp. (Might not be useful.)
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>% 
+  mutate(recent_temp = substring(gsub(".*°F (.+) °C.*", "\\1", Temp), 2)  ) %>% 
+  mutate(recent_temp = as.numeric(recent_temp))
+
+df %>% count(recent_temp) %>% arrange(desc(recent_temp)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+df %>% ggplot() +
+  geom_histogram(aes(x = recent_temp), color = "black", fill = "white") + theme_classic() +
+  geom_vline(xintercept = 38, color = "red", linetype = "dashed")
+```
+
+<br>
+
+### Last PCP visit 
+### Last Well Child visit 
+### Recent contact
+
+### 
 
 
 
