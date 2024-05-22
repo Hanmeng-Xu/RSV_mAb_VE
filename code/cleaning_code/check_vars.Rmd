@@ -6,6 +6,8 @@ output:
     toc_float: true
 ---
 
+Date: `r Sys.Date()`
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE,
                       warning = FALSE,
@@ -21,9 +23,10 @@ library(ggplot2)
 library(stringr)
 
 
-
 fig.counter <- 1
 tab.counter <- 1
+
+save_recoded_dataset <- FALSE
 ```
 
 ### Table `r tab.counter`. StudyID
@@ -836,6 +839,21 @@ pattern_bronchiolitis <- "bronchiolitis|Bronchospasm"
 pattern_sepsis <- "sepsis"
 
 pattern_apnea <- "apnea"
+
+# some general terms used to detect if the record's encounter is suspcted resp infection
+pattern_suspect_resp_general <- paste(c("respiratory",
+                                        "RSV",
+                                        "syncytial",
+                                        "viral infection",
+                                        "covid",
+                                        "influenza", 
+                                        "flu",
+                                        "viral illness",
+                                        "Viral syndrome",
+                                        "nasal",
+                                        "asthma",
+                                        "decreased activity"), 
+                                      collapse = "|")
 ```
 
 
@@ -1050,7 +1068,7 @@ df <- df %>%
 
 ```
 
-#### From recoded varibles 
+#### From recoded variables 
   * med_hist_xx
   * prob_list_xx
   * prim_prob_xx
@@ -1123,11 +1141,10 @@ df <- df %>%
 tab.counter <- tab.counter + 1
 
 df %>% filter(is.na(symp_URT_distress) & is.na(symp_LRT_distress) & is.na(symp_fever) & is.na(symp_cough) & is.na(symp_wheezing) & is.na(symp_breathing) & is.na(symp_bronchiolitis) & is.na(symp_sepsis & is.na(symp_apnea)) &
-                     !str_detect(`Primary Problem`, "respiratory|RSV|syncytial")  & 
-                     !str_detect(`ED Dx`, "respiratory|RSV|syncytial")  & 
-                     !str_detect(`Admit Dx`, "respiratory|RSV|syncytial") & 
-                     !str_detect(`Hospital Problem List`, "respiratory|RSV|syncytial")
-                   ) %>% 
+                     grepl(pattern_suspect_resp_general, `Primary Problem`,ignore.case = T) %in% c(NA, FALSE)  & 
+                     grepl(pattern_suspect_resp_general, `ED Dx`, ignore.case = T) %in% c(NA, FALSE) & 
+                     grepl(pattern_suspect_resp_general, `Admit Dx`,ignore.case = T) %in% c(NA, FALSE) & 
+                     grepl(pattern_suspect_resp_general, `Hospital Problem List`,ignore.case = T) %in% c(NA, FALSE)                   ) %>% 
   select(StudyID, `Primary Problem`, `ED Dx`, `Admit Dx`, `Hospital Problem List`) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
             columns = list(
@@ -1152,9 +1169,10 @@ data.frame(
   symp_wheezing = nrow(df %>% filter(symp_wheezing == 1)),
   symp_breathing = nrow(df %>% filter(symp_breathing == 1)),
   symp_bronchiolitis = nrow(df %>% filter(symp_bronchiolitis == 1)),
-  symp_sepsis = nrow(df %>% filter(symp_sepsis == 1))
+  symp_sepsis = nrow(df %>% filter(symp_sepsis == 1)),
+  symp_apnea = nrow(df %>% filter(symp_apnea == 1))
 ) %>%
-  pivot_longer(cols = 1:8, names_to = "symp", values_to = "n_records") %>%
+  pivot_longer(cols = 1:9, names_to = "symp", values_to = "n_records") %>%
   arrange(desc(n_records)) %>%
   mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -1192,15 +1210,17 @@ data.frame(
 <br>
 
 ### Table `r tab.counter`. There are records missing diagnosis details:
-#### aka. records that are missing for all following variables: 
+#### aka. records that are missing for all following variables:
   * Primary Problem
   * ED Dx
   * Admit Dx
   * Hospital Problem List
+This table is a subset of table 20 above.
 ```{r}
 tab.counter <- tab.counter + 1
 
 df %>% filter(is.na(`ED Dx`) & is.na(`Admit Dx`) & is.na(`Primary Problem`) & is.na(`Hospital Problem List`)) %>%
+  filter(`Fever?` == "No" & recent_temp <= 38) %>%
   select(StudyID, `Fever?`, recent_temp, `Medical History`, `Problem List`
          # `Primary Problem`, `ED Dx`, `Admit Dx`, `Hospital Problem List`
          ) %>% 
@@ -1235,33 +1255,89 @@ df.nir <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_d
 # merge nirsevimab tab with main tab 
 df <- df %>% select(-`mAb Date`, - Nirsevimab) %>% 
   left_join(df.nir %>% select(-`IMM Entry Date`), by = "StudyID")
+```
 
+### Figure `r fig.counter`. ` See how many mAb were administered after sample collection
+```{r}
+fig.counter <- fig.counter + 1
+
+df <- df %>% 
+  mutate(days_btw_mab_collection = as.numeric(as.Date(`mAb date`) - collection_date)) 
+
+df %>% 
+  filter(!is.na(days_btw_mab_collection)) %>%
+  select(StudyID, collection_date, `mAb date`, days_btw_mab_collection) %>%
+  ggplot() + 
+  geom_histogram(aes(x = days_btw_mab_collection), color = "black", fill ="white") +
+  geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
+  xlab("days_btw_mab_collection\n (Date of mAb - date of collection)") + theme_classic()
+```
+### Those who received mAb within 7 days before sample collection OR received on/after date of collection:
+```{r}
+df %>% 
+  filter(!is.na(days_btw_mab_collection)) %>%
+  filter(days_btw_mab_collection > -7) %>%
+  arrange(days_btw_mab_collection) %>%
+  select(StudyID,  days_btw_mab_collection,`mAb date`, collection_date) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px")) 
+  
 ```
 
 <br>
 
-### Table `r tab.counter`. Nirsevimab status 
-#### Generated new binary variables rsv_mab, to have values of 
-  * 50mg
-  * 100mg 
+### Table `r tab.counter`. Nirsevimab status
+#### Generated new categorical variables rsv_mab_detailed, to have values of 
+  * 50mg before collection (days_btw_mab_collection < 0)
+  * 100mg before collection (days_btw_mab_collection < 0)
+  * 50mg after collection (days_btw_mab_collection >= 0)
+  * 100mg after collection (days_btw_mab_collection >= 0)
   * no mAb recorded but with last hepB vax recorded
   * no mAb recorded and no last hepB vax recorded
+  
 ```{r}
 df <- df %>% 
-  mutate(rsv_mab = case_when(`Nirsevimab info` == "RSV, MAB, NIRSEVIMAB-ALIP, 50 MG/0.5 ML, FOR PATIENTS < 5 KG [306]" ~  "50mg",
-                             `Nirsevimab info` == "RSV, MAB, NIRSEVIMAB-ALIP, 100 MG/ML, FOR PATIENTS >= 5 KG [307]"  ~ "100mg",
+  mutate(rsv_mab_detailed = case_when(`Nirsevimab info` == "RSV, MAB, NIRSEVIMAB-ALIP, 50 MG/0.5 ML, FOR PATIENTS < 5 KG [306]" & 
+                              days_btw_mab_collection < 0 ~  "50mg before collection",
+                             `Nirsevimab info` == "RSV, MAB, NIRSEVIMAB-ALIP, 100 MG/ML, FOR PATIENTS >= 5 KG [307]" &
+                              days_btw_mab_collection < 0 ~ "100mg before collection",
+                             `Nirsevimab info` == "RSV, MAB, NIRSEVIMAB-ALIP, 50 MG/0.5 ML, FOR PATIENTS < 5 KG [306]" & 
+                              days_btw_mab_collection >= 0 ~  "50mg after collection",
+                             `Nirsevimab info` == "RSV, MAB, NIRSEVIMAB-ALIP, 100 MG/ML, FOR PATIENTS >= 5 KG [307]" &
+                              days_btw_mab_collection >= 0 ~ "100mg after collection",
                              is.na(`Nirsevimab info`) & !is.na(`Hep B Imm Last Given`) ~ "no mAb recorded but with last hepB vax recorded",
                              is.na(`Nirsevimab info`) & is.na(`Hep B Imm Last Given`) ~ "no mAb recorded and no last hepB vax recorded"))
+
+df %>% count(rsv_mab_detailed) %>% rename(n_records = n) %>%
+  mutate(perc = round(n_records/nrow(df)*100,1)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+#### Generated new binary variable rsv_mab from rsv_mab_detailed, to indicate if the record took mAb before collection (TBC), which is to be used as exposure in the analysis:
+  * 50mg before collection ---> 1
+  * 100mg before collection ---> 1
+  * 50mg after collection ---> 0
+  * 100mg after collection ---> 0
+  * no mAb recorded but with last hepB vax recorded ---> 0
+  * no mAb recorded and no last hepB vax recorded ---> 0
+  
+```{r}
+df <- df %>% 
+  mutate(rsv_mab = case_when(rsv_mab_detailed %in% c("50mg before collection",
+                                                     "100mg before collection") ~ 1,
+                             rsv_mab_detailed %in% c("50mg after collection",
+                                                     "100mg after collection",
+                                                     "no mAb recorded but with last hepB vax recorded",
+                                                     "no mAb recorded and no last hepB vax recorded") ~ 0))
 
 df %>% count(rsv_mab) %>% rename(n_records = n) %>%
   mutate(perc = round(n_records/nrow(df)*100,1)) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
-
 <br>
 
 ### Figure `r fig.counter`. Age at mAb 
 Generate new variable age_at_mab_in_days (calculated as mAb date in nir tab - DOB )
+The figure below only includes rsv_mab == 1:
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -1269,9 +1345,11 @@ df <- df %>%
   mutate(age_at_mab_in_days = as.numeric(as.Date(`mAb date`) - as.Date(DOB) ))
 
 df %>% 
+  filter(rsv_mab == 1) %>%
   ggplot() +
   geom_histogram(aes(x = age_at_mab_in_days), color = "black", fill = "white") + theme_classic()
 ```
+
 
 <br>
 
@@ -1300,10 +1378,12 @@ df %>% ggplot() +
 ```
 
 <br>
+<br>
+<br>
 
 
-### Records that have more than one testing records 
 ```{r}
+### Records that have more than one testing records 
 df.multi.tests <- df %>% filter(StudyID %in% id_multi_tests) %>% arrange(StudyID, `Collection Date`)
 
 a <- df.multi.tests %>% select(StudyID, `mAb date`,
@@ -1317,8 +1397,161 @@ a <- df.multi.tests %>% select(StudyID, `mAb date`,
 # write_xlsx(a, "../../data/multi_tests_records.xlsx")
 ```
 
+### For each testing record, generate unique testID
+#### If a patient was tested multiple times, the testID will has values of StudyID_nthTest (e.g. 99999999_1, 9999999_2..), the suffix indicates the nth test of the patient, ordered by date of sample collection.
+Also generated n_tests for each StudyID, to indicate the number of tests this individual took,
+and generated new variable nth_test to indicate this is the nth test of the same individual patient.
+```{r}
+df <- df %>% 
+  group_by(StudyID) %>%
+  arrange(collection_date) %>%
+  mutate(n_tests = n()) %>% 
+  mutate(testID = paste0(StudyID, "_", 1:n_tests)) %>%
+  arrange(StudyID) 
+
+# also generate variable nth_test to indicate this is the nth test of the same patient
+df <- df %>% as.data.frame() %>% mutate(nth_test = str_sub(testID, -1))
+```
+
+### Table `r tab.counter`. Time since earliest collection for each patient
+#### if an individual has multiple tests, for each test, generate new variables:
+  * days_since_earliest_collection: the time elapse since the earliest test (in days)
+  * days_since_last_collection: time elapse since the most recent test (in days)
+  * days_to_next_collection: time to next collection (in days).
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>% 
+  group_by(StudyID) %>%
+  mutate(days_since_earliest_collection = as.numeric(collection_date - min(collection_date))) %>%
+  as.data.frame()
+
+df <- df %>% 
+  group_by(StudyID) %>%
+  mutate(days_since_last_collection = case_when(days_since_earliest_collection == 0 ~ 0,
+                                                days_since_earliest_collection > 0 ~ 
+                                                  as.numeric(collection_date - lag(collection_date)))) %>%
+  as.data.frame()
+
+df <- df %>% 
+  group_by(StudyID) %>%
+  mutate(days_to_next_collection = case_when(nth_test == n_tests ~ 0,
+                                             nth_test < n_tests ~ 
+                                               as.numeric( lead(collection_date) - collection_date )
+                                               )) %>% 
+  as.data.frame()
+  
 
 
+df %>% filter( days_since_earliest_collection > 0) %>%
+  ggplot() + geom_histogram(aes(x = days_since_earliest_collection), color = "black", fill = "white") + theme_classic()
+```
+
+<br>
+
+#### There are several individuals with more than one testing results on the same day.
+```{r}
+temp_id <- (df %>% group_by(StudyID, collection_date) %>% count() %>% filter(n>1))$StudyID 
+
+df %>% filter(StudyID %in% temp_id) %>%
+  select(StudyID, collection_date, `Collection Department`, tested_viruses, positive_viruses, encounter_type, `Admit Date`) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "13px"),
+            groupBy = "StudyID", defaultExpanded = T)
+```
+
+<br>
+
+### Mark testing records as cases and control, Current strategies:
+
+(reference: https://pubmed.ncbi.nlm.nih.gov/36454733/)
+#### Test-positive cases: 
+  * A case of test-positive is defined as a positive RSV test.
+
+#### Test-negative controls:
+  * We define test-negative control as a negative RSV test 
+    + collected at any time if this patient was tested only once, OR
+    + collected > 7 days prior this patient's next test AND collected > 7 days after this patient's last test (if the patient was tested multiple times)
+
+#### Other notes:
+  * An individual patient is allowed to contribute as both case and control, as the analysis is to be conducted at test-level, instead of patient-level. 
+  * Each patient can contribute to up to three negative tests (controls).
+  *	If a person had more than one negative test within 7-day period, one random test was selected during the period as a control.
+
+```{r echo = T}
+##########################
+# mark test-positive cases
+##########################
+
+df <- df %>% mutate(case_control = ifelse(positive_rsv == 1, "case", NA)) 
+
+#############################
+# mark test-negative controls
+#############################
+
+# generate a binary indicator to mark if this patient's next test is RSV positive (didn't use this) 
+df <- df %>% 
+  group_by(StudyID) %>%
+  mutate(next_test_rsv_positive = lead(positive_rsv)) %>% 
+  # NA if a person was tested once or this is a last test of an individual
+  as.data.frame()
+  
+
+df <- df %>%
+  group_by(StudyID) %>% 
+  mutate(case_control = case_when(
+  # 1. the patient was only tested once and was rsv negative
+    (positive_rsv == 0 & n_tests == 1) | 
+  # 2. the patient was tested multiple times: 
+    # 2.1 if this is not the first or last test of the patient 
+    # this negative test should be >7 days prior next test AND >7 days after previous test
+    (positive_rsv == 0 & n_tests > 1 & days_to_next_collection > 7 & days_since_last_collection > 7) |
+    # 2.2 if this is the first test of the patient
+    # this negative test should be > 7 days prior next test
+    (positive_rsv == 0 & n_tests > 1 & nth_test == 1 & days_to_next_collection > 7) |
+    # 2.3 if this is the last test of the patient
+    # this negative test should be > 7 days after previous test
+    (positive_rsv == 0 & n_tests > 1 & nth_test == n_tests & days_since_last_collection > 7) ~ "control",
+    TRUE ~ case_control
+  )) %>% as.data.frame()
+
+
+# If a person had more than one negative test within 7-day period, one random test was selected during the period as a control
+set.seed(123)
+temp <- df %>% 
+  group_by(StudyID) %>%
+  filter( 
+    (  ((days_to_next_collection <= 7 | days_since_last_collection <= 7) & nth_test != 1 & n_tests != nth_test) | # tests in the middle 
+       (nth_test == 1 & days_to_next_collection <= 7) | # first test
+       (nth_test == n_tests & days_since_last_collection <= 7) # last test
+    ) &  positive_rsv == 0)  %>%
+  mutate(n_controls_to_sample_from = n()) %>%
+  select(StudyID, n_controls_to_sample_from) %>% unique()
+  
+
+df <- df %>% left_join(temp, by = "StudyID")
+  
+# random select one control 
+randomly.selected.controls.ids <- (df %>%
+  filter(n_controls_to_sample_from > 1 & is.na(case_control)) %>%
+  group_by(StudyID) %>% 
+  sample_n(1) %>% 
+  mutate(control_randomly_selected = 1))$testID
+  
+# mark these controls
+df <- df %>% 
+  mutate(randomly_selected_control = ifelse(testID %in% randomly.selected.controls.ids, 1, 0)) %>% 
+  mutate(case_control = ifelse(randomly_selected_control == 1, "control", case_control))
+
+df %>% count(case_control) %>% 
+  mutate(perc = round(n/nrow(df)*100, 1)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "13px")) 
+```
+
+```{r}
+if(save_recoded_dataset){
+  write.csv(df, "/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_mAb.csv", row.names = F)
+}
+```
 
 
 
