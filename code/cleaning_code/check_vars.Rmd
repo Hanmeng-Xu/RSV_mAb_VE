@@ -6,7 +6,7 @@ output:
     toc_float: true
 ---
 
-Date: `r Sys.Date()`
+#### Date: `r Sys.Date()`
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE,
@@ -46,7 +46,7 @@ df %>% group_by(StudyID) %>% count() %>% group_by(n) %>% count() %>% rename(`Tim
 
 There are `r n_unique` patients in the original main dataset. There are `r n_single_test` patients tested only once, and `r n_multi_test` patients were tested more than once. 
 
-<br.
+<br>
 
 ### Figure `r fig.counter`. Display age at testing and remove records above 1 yo.
   * Remove records with (collection date - DOB) > 12 months.
@@ -86,21 +86,21 @@ n_multi_test <- df %>% group_by(StudyID) %>% count() %>% filter(n>1) %>% nrow()
 
 # tested many times 
 id_multi_tests <- (df %>% group_by(StudyID) %>% count() %>% filter(n > 1))$StudyID # those who had multiple tests
-id_5tests <- (df %>% group_by(StudyID) %>% count() %>% filter(n == 5))$StudyID
-id_6tests <- (df %>% group_by(StudyID) %>% count() %>% filter(n == 6))$StudyID
+id_5tests <- as.character((df %>% group_by(StudyID) %>% count() %>% filter(n == 5))$StudyID)
+id_6tests <- as.character((df %>% group_by(StudyID) %>% count() %>% filter(n == 6))$StudyID)
 
 # unique ids 
 id_unique <- (df %>% group_by(StudyID) %>% count())$StudyID 
 
-df %>% group_by(StudyID) %>% count() %>% group_by(n) %>% count() %>% rename(`Times tested` = n, n_records = nn) %>%
+df %>% group_by(StudyID) %>% count() %>% group_by(n) %>% count() %>% rename(`Times tested` = n, n_patients = nn) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
 
 After removing records > 12 months at testing, there are `r n_unique` patients in the dataset. There are `r n_single_test` patients tested only once, and `r n_multi_test` patients were tested more than once. 
 
-StudyID for those who tested 5 timese: `r id_5tests`.
-StudyID for those who tested 6 timese: `r id_6tests`.
+StudyID for those who were tested 5 timese: `r id_5tests`.
+StudyID for those who were tested 6 timese: `r id_6tests`.
 
 
 
@@ -121,7 +121,7 @@ df <- df %>%
 
 <br>
 
-### Figure `r fig.counter`. Sex & Age at testing (after removing > 1 yo records )
+### Figure `r fig.counter`. Sex & Age at testing (after removing age at testing > 1 yo records )
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -163,10 +163,11 @@ Sample collection date: `r min_cd` ~ `r max_cd`.
 ### Viral test, Resp Result, Viral detected: 
 #### From these variables, generate variables:
   * tested_xxx: indicating whether this record was tested for certain virus
-  * positive_xxx: the testing results for certain virus.
+  * positive_xxx: the testing results for certain virus (flu,rhino,hmpv,adeno,parainfluenza,rsv).
+  
 #### From tested_xxx and positive_xxx, generate new variable:
-  * tested_viruses: string class, listing viruses tested for a record (some viruses are not listed here)
-  * positive_viruses: string class, listing viruses tested positive for a record (some viruses are not listed here)
+  * tested_viruses: string class, listing viruses tested for a record (some viruses are not listed here, like covid)
+  * positive_viruses: string class, listing viruses tested positive for a record (some viruses are not listed here, like covid)
 ```{r}
 # generate "whether tested" variables 
 df <- df %>% 
@@ -237,7 +238,7 @@ df <- cbind.data.frame(df,
 
 ```
 
-### Table `r tab.counter`. Viral test
+### Table `r tab.counter`. Viral test (taken by a record)
 ```{r}
 tab.counter <- tab.counter + 1
 # briefly summarize testing
@@ -247,11 +248,12 @@ df %>%
 
 ```
 
-This table shows the number of testing records (w/ duplicates) that took certain tests, some viruses are not included here.
+This table shows the number of testing records (w/ duplicates) that took certain tests, some viruses are not included here (like SARS-CoV-2).
 
 <br>
 
 ### Table `r tab.counter`. Viral test results (by virus combo)
+Listing all the combinations of viral test results. Each record contributes one virus combo.
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -264,6 +266,7 @@ df %>%
 <br>
 
 ### Table `r tab.counter`. Viral test results (by single virus)
+Listing viruses tested positive, each record can contribute one or more as one record can be tested positive for multiple viruses.
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -286,7 +289,7 @@ data.frame(
 <br>
 
 ### Table `r tab.counter`. Admit Date
-There might be some uncertainty about this variable. Here calculated time difference (in days) between Admit Date and sample collection.
+There might be some uncertainty about this variable so we might not trust this 100%. Here calculated time difference (in days) between Admit Date and sample collection. (this variable might not be that useful in the actual analyses.)
 ```{r}
 tab.counter <- tab.counter + 1
  
@@ -312,15 +315,32 @@ temp <- df %>% mutate(days_btw_admit_collect = as.numeric(as.Date(`Collection Da
 
 
 ### Table `r tab.counter`. Hosp LoS
-Length of Stay (in days) of hospitalization recorded in the main dataset.
+Length of Stay (in days) of hospitalization recorded in the main dataset. **Can this be a measure of severity?**
 ```{r}
 tab.counter <- tab.counter + 1
 
 df %>%  count(`Hosp LoS`) %>% reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+n_missing_hosp_los <- df %>% filter(is.na(`Hosp LoS`)) %>% nrow()
+```
+  * Hosp LOS for "Emergency", "Specimen", "Outpatient", "Hospital Outpatient Surgery" encounter type: all are 1 day;
+  * Hosp LOS for "Observation" encounter type: all but 2 records are 2 days, others all 1 day;
+  * Hosp LOS for "Newborn" encounter type: range from 3-287 days
+  
+#### There are `r n_missing_hosp_los` records missing Hosp LoS: (these are all records from BH EMERGENCY DEPARTMENT)
+**Can I recode the Hosp LoS of these to 1 (TBC)?**
+```{r}
+df %>% filter(is.na(`Hosp LoS`)) %>% arrange(StudyID) %>% 
+  select(StudyID, collection_date, `Collection Department`, tested_viruses, positive_viruses) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
+  
+
+<br>
+
 ### Table `r tab.counter`. Collection Department & Admission location
-#### Recode these two to sample_source variable:
+#### Recode these two to sample_source variable (might not be very useful?):
   * if Admission Location is available, use Admission Location;
   * if Admission Location is not available, use Collection Department.
 ```{r}
@@ -348,7 +368,7 @@ df %>% group_by(`Encounter Type`) %>% count() %>% arrange(desc(n)) %>%
 <br>
 
 ### Table `r tab.counter`. Records missing Encounter type 
-There are 35 missings for original "encounter type" variable: How to classify encounter type for these? (TBC)
+There are 35 missings for original "encounter type" variable. Most seem to be from LABs or DRAW STATION except one record from "NE PEDS OLD SAYBROOK", **can I classify them as "Specimen" ? (TBC)**
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -362,13 +382,13 @@ df %>% select(StudyID, `Collection Department`, `Admission Location`, `Encounter
 
 ### Table `r tab.counter`. Aggregate "Encounter Type" to fewer categories 
 #### Generated new variable: encounter_type, coded as:
-  * Emergency --> outpatient
-  * Outpatient --> outpatient
-  * Hospital Outpatient Surgery --> outpatient 
-  * Specimen --> outpatient 
-  * Inpatient --> inpatient 
-  * Observation --> inpatient? (TBC)
-  * Newborn --> inpatient? (TBC)
+  * Emergency ---> outpatient
+  * Outpatient ---> outpatient
+  * Hospital Outpatient Surgery ---> outpatient 
+  * Specimen ---> outpatient (TBC)
+  * Inpatient ---> inpatient 
+  * Observation ---> inpatient? (TBC)
+  * Newborn ---> inpatient? (TBC)
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -392,7 +412,7 @@ df %>% count(encounter_type) %>% rename(n_records = n) %>%
 #### Generated new variables:
   + date_icu_admit: the same as ICU Admission Date but in Date class, N/A as NA;
   + days_btw_collection_icu: days between sample collection and ICU admission.
-  + date_icu_admit_related: ICU admission that can be linked with the testing result (**within a week of testing? TBC**)
+  + date_icu_admit_related: ICU admission that can be linked with the testing result (**within a week of sample collection date? TBC**)
   + icu_admitted_related: binary variable indicating whether the icu can be related to the testing result (within a week of testing)
   
 ```{r}
@@ -427,7 +447,7 @@ df %>%
 <br>
 
 ### Figure `r fig.counter`. ICU LOS
-#### The original data was in XXd XXh. Generate new variables:
+#### The original data was in XXd XXh format. Generate new variables:
   * icu_los_hours (unit: hour)
   * icu_los_days (unit: day)
 ```{r}
@@ -449,7 +469,7 @@ df <- df %>%
 
 df %>%
   filter(icu_admitted_related == 1) %>%
-  ggplot() + ggtitle("Only plotting ICU admissions related to the testing results \n (within a week of sample collection)") +
+  ggplot() + ggtitle("Only plotting ICU admissions related to the testing \n (within a week of sample collection)") +
   geom_histogram(aes(x = icu_los_days), color = "black", fill = "white")  + theme_classic()
 ```
 
@@ -466,8 +486,8 @@ df %>% filter(icu_admitted_related == 1) %>% filter(icu_los_days > 30)%>%
 
 <br>
 
-### Figure `r fig.counter`. Gest age 
-There are ~700 records missing for Gest Age variable.
+### Figure `r fig.counter`. Gest age (as recorded in "Gest Age" variable)
+There are ~700 records missing for original Gest Age variable.
 
 ```{r}
 fig.counter <- fig.counter + 1
@@ -477,14 +497,16 @@ df %>%
   
 ```
 
-#### Generate categorical variable of gest age: gest_age_cat
+#### Generate categorical variable of gest age: gest_age_cat **(is the following classification okay? combine groups?)**
+#### Reference: https://www.cdc.gov/nchs/data/nvsr/nvsr73/nvsr73-01.pdf
   *	42 and +: post term
   *	41: late term
   * 39-40: full term
   * 37-38: early term
   *	< 37: preterm
  
-### Table `r tab.counter`.
+### Table `r tab.counter`. Gest Age (classified only using "Gest Age" variable)
+#### In addition to "Gest Age" variable, I will also use Medical History, Problems.. variables to classify gestational age to fill in NA here, see below.
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -496,6 +518,7 @@ df <- df %>%
                                     `Gest Age` < 37 ~ "preterm")) 
   
 df %>% count(gest_age_cat) %>% arrange(desc(n)) %>% rename(n_records = n) %>%
+  mutate(perc = round(n_records / nrow(df) * 100,1)) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 
 ```
@@ -504,7 +527,7 @@ df %>% count(gest_age_cat) %>% arrange(desc(n)) %>% rename(n_records = n) %>%
 
 ### Figure `r fig.counter`. Birth weight
   * PENDING: Generate birth_weight_kg (numeric), low_birth_weight (binary). Low birth weight is defined as a birth weight of less than 2500 g (up to and including 2499 g), as per the World Health Organization (WHO).
-  * what is the unit of original variable Birth Wgt? Haven't generated new variables (??).
+  * what is the unit of original variable Birth Wgt? Haven't generated new variables (TBC?).
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -516,7 +539,7 @@ df %>%
 <br>
 
 ### Table `r tab.counter`. Race and Ethnicity (PENDING)
-There are many conflicting answers. Here are the unique answers for Race variable:
+There are many conflicting answers (TBC?). Here are the unique answers for Race variable:
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -533,9 +556,9 @@ df %>% count(Ethnicity) %>% arrange(desc(n)) %>%
 
 ### Table `r tab.counter`. Primary Insurance & Payor
 #### Generate new variable insurance_type (TBC)
-  *	Medicare / Medicaid --> public insurance 
-  *	All others --> private insurance 
-  *	Who are considered as “uninsured”? (patients having NA for both? n = 17)
+  *	Medicare / Medicaid ---> public insurance 
+  *	All others ---> private insurance 
+  *	Who are considered as “uninsured”? (patients having NA for Primary Insurance and Payor variable? n = 17)
 ```{r}
 tab.counter <- tab.counter + 1
 df <- df %>% 
@@ -564,7 +587,7 @@ df %>% count(`Fever?`) %>%
 <br>
 
 ### Table `r tab.counter`. Temp
-The most recent flowsheet data for temperature. Convert to new numeric variable recent_temp. (Might not be useful.)
+The most recent flowsheet data for temperature. Convert to new numeric variable recent_temp. (Might not be useful as this is the "most recent" temperature, but I used this below in generating symptom variables, if recent_temp>38, I considered this record had fever symptom.)
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -588,13 +611,15 @@ df %>% ggplot() +
 
 <br>
 
-### Below are text patterns to detect risk factors (i.e. underlying conditions) and respiratory symptoms from the following variables:
+### Below are text patterns to detect risk factors (i.e. underlying conditions) and respiratory symptoms from the following variables (TBC):
   * Medical History (past?) ---> risk factors
   * Problem List (past?) ---> risk factors
   * Primary Problem (current? TBC) ---> risk factors & respiratory symptoms
   * ED Dx (current? TBC) ---> risk factors & respiratory symptoms
   * Admit Dx (current? TBC) ---> risk factors & respiratory symptoms
   * Hospital Problem List (current? TBC) ---> risk factors & respiratory symptoms
+  
+#### I detected the presence of these patterns to see if a record has certain risk factor (based on past and current encounters) or show a certain respiratory symptom in current encounter (based on diagnosis records of current encounter). The new variables generated are binary variables. For example, med_hist_congen_heart means that based on description in the "Medical History" variable, this records had congenital heart disease, which can be a risk factor for more severe outcomes.
 ```{r, echo = T}
 ######################################
 # patterns for underlying risk factors
@@ -621,7 +646,8 @@ pattern_liver <- paste(c("liver cell damage",
                          "Liver transplanted"), 
                        collapse = "|")
 
-pattern_cvd <- paste(c("Atrial septa|ventricular septa",
+pattern_cvd <- paste(c("Atrial septa",
+                       "ventricular septa",
                  "Patent ductus arteriosus",
                  "Cardiac abnormality",
                  "Congenital heart disease",
@@ -1068,7 +1094,7 @@ df <- df %>%
 
 ```
 
-#### From recoded variables 
+#### From the generated binary variables 
   * med_hist_xx
   * prob_list_xx
   * prim_prob_xx
@@ -1114,13 +1140,13 @@ df <- df %>%
 
 <br>
 
-#### From recoded varibles 
+#### From generated binary varibles 
   * prim_prob_xx
   * ED_dx_xx
   * Admit_dx_xx
   * hosp_prob_xx
   
-#### generate new binary variables **(symp_xxx)** indicating whether this record has certain symptoms related to respiratory infections.
+#### generate new binary variables **(symp_xxx)** indicating whether this record has certain respiratory symptoms at this encounter.
 ```{r}
 df <- df %>% 
   mutate(symp_URT_distress = case_when(prim_prob_URTI == 1 | ED_dx_URTI == 1 | admit_dx_URTI == 1 | hosp_prob_URTI == 1 ~ 1)) %>% 
@@ -1136,7 +1162,8 @@ df <- df %>%
 
 <br>
 
-### Table `r tab.counter`. There are some records that no patterns of respiratory symptoms (above patterns) can be detected
+### Table `r tab.counter`. There are some records that no patterns of respiratory symptoms (above patterns) can be detected 
+#### (Should they be considered suspected respiratory/RSV infections and included in the study population? TBC)
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -1157,29 +1184,9 @@ df %>% filter(is.na(symp_URT_distress) & is.na(symp_LRT_distress) & is.na(symp_f
 
 <br>
 
-### Table `r tab.counter`. Summarize extracted risk factors
-```{r}
-tab.counter <- tab.counter + 1
 
-data.frame(
-  symp_URT_distress = nrow(df %>% filter(symp_URT_distress == 1)),
-  symp_LRT_distress = nrow(df %>% filter(symp_LRT_distress == 1)), 
-  symp_fever = nrow(df %>% filter(symp_fever == 1)),
-  symp_cough = nrow(df %>% filter(symp_cough == 1)),
-  symp_wheezing = nrow(df %>% filter(symp_wheezing == 1)),
-  symp_breathing = nrow(df %>% filter(symp_breathing == 1)),
-  symp_bronchiolitis = nrow(df %>% filter(symp_bronchiolitis == 1)),
-  symp_sepsis = nrow(df %>% filter(symp_sepsis == 1)),
-  symp_apnea = nrow(df %>% filter(symp_apnea == 1))
-) %>%
-  pivot_longer(cols = 1:9, names_to = "symp", values_to = "n_records") %>%
-  arrange(desc(n_records)) %>%
-  mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
-  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
-
-```
-
-### Table `r tab.counter`. Summarize extracted respiratory symptoms
+### Table `r tab.counter`. Summarize extracted risk factors 
+Each record can have multiple risk factors.
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -1205,7 +1212,30 @@ data.frame(
 
 ```
 
+<br>
 
+### Table `r tab.counter`. Summarize extracted respiratory symptoms
+Each record can have multiple symptoms.
+```{r}
+tab.counter <- tab.counter + 1
+
+data.frame(
+  symp_URT_distress = nrow(df %>% filter(symp_URT_distress == 1)),
+  symp_LRT_distress = nrow(df %>% filter(symp_LRT_distress == 1)), 
+  symp_fever = nrow(df %>% filter(symp_fever == 1)),
+  symp_cough = nrow(df %>% filter(symp_cough == 1)),
+  symp_wheezing = nrow(df %>% filter(symp_wheezing == 1)),
+  symp_breathing = nrow(df %>% filter(symp_breathing == 1)),
+  symp_bronchiolitis = nrow(df %>% filter(symp_bronchiolitis == 1)),
+  symp_sepsis = nrow(df %>% filter(symp_sepsis == 1)),
+  symp_apnea = nrow(df %>% filter(symp_apnea == 1))
+) %>%
+  pivot_longer(cols = 1:9, names_to = "symp", values_to = "n_records") %>%
+  arrange(desc(n_records)) %>%
+  mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+```
 
 <br>
 
@@ -1215,13 +1245,15 @@ data.frame(
   * ED Dx
   * Admit Dx
   * Hospital Problem List
-This table is a subset of table 20 above.
+
+This table is a subset of table 20 above. (all records here are from outpatient)
 ```{r}
 tab.counter <- tab.counter + 1
 
 df %>% filter(is.na(`ED Dx`) & is.na(`Admit Dx`) & is.na(`Primary Problem`) & is.na(`Hospital Problem List`)) %>%
   filter(`Fever?` == "No" & recent_temp <= 38) %>%
   select(StudyID, `Fever?`, recent_temp, `Medical History`, `Problem List`
+         , icu_admitted_related, encounter_type
          # `Primary Problem`, `ED Dx`, `Admit Dx`, `Hospital Problem List`
          ) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
@@ -1248,7 +1280,7 @@ There are `r n_temp` records whose mom received RSV maternal vaccine. (self repo
 
 
 ### Read in Nirsevimab tab from excel
-This tab contains nirsevimab information, if there is discordance between the main tab and this tab about the nirsevimab, use this tab. (There is no duplicate in the nirsevimab tab).
+This tab contains nirsevimab information, if there is discordance between the main tab and this tab about the nirsevimab, use this tab's information. (There is no duplicate in the nirsevimab tab).
 ```{r}
 df.nir <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_deid_2024_may.xlsx", sheet = "nirsevimab")
 
@@ -1257,7 +1289,7 @@ df <- df %>% select(-`mAb Date`, - Nirsevimab) %>%
   left_join(df.nir %>% select(-`IMM Entry Date`), by = "StudyID")
 ```
 
-### Figure `r fig.counter`. ` See how many mAb were administered after sample collection
+### Figure `r fig.counter`. See how many mAb were administered after sample collection
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -1270,18 +1302,22 @@ df %>%
   ggplot() + 
   geom_histogram(aes(x = days_btw_mab_collection), color = "black", fill ="white") +
   geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
-  xlab("days_btw_mab_collection\n (Date of mAb - date of collection)") + theme_classic()
+  xlab("days_btw_mab_collection\n (Date of mAb - date of collection)") + theme_classic() +
+  annotate("text", x = 50, y = 45 , label = "---> mAb immunization \nAFTER sample collection", color = "red")
 ```
+
 ### Those who received mAb within 7 days before sample collection OR received on/after date of collection:
+#### (TBC) how do we define exposure? those who are immunized with mAb before sample collection date or those who are immunized >7 days before sample collection date?
 ```{r}
 df %>% 
   filter(!is.na(days_btw_mab_collection)) %>%
-  filter(days_btw_mab_collection > -7) %>%
+  filter(days_btw_mab_collection >= -7) %>%
   arrange(days_btw_mab_collection) %>%
   select(StudyID,  days_btw_mab_collection,`mAb date`, collection_date) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px")) 
   
 ```
+
 
 <br>
 
@@ -1337,7 +1373,7 @@ df %>% count(rsv_mab) %>% rename(n_records = n) %>%
 
 ### Figure `r fig.counter`. Age at mAb 
 Generate new variable age_at_mab_in_days (calculated as mAb date in nir tab - DOB )
-The figure below only includes rsv_mab == 1:
+The figure below only includes records with rsv_mab == 1:
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -1363,7 +1399,7 @@ df <- df %>%
 ```
 
 ### Figure `r fig.counter`. Maximum oxygen flow rate
-Generate new variable max_oxygen_flowrate (L/min)
+#### Generate new variable max_oxygen_flowrate (unit: L/min), which threshold to use to indicate severe outcome? TBC
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -1415,9 +1451,9 @@ df <- df %>% as.data.frame() %>% mutate(nth_test = str_sub(testID, -1))
 
 ### Table `r tab.counter`. Time since earliest collection for each patient
 #### if an individual has multiple tests, for each test, generate new variables:
-  * days_since_earliest_collection: the time elapse since the earliest test (in days)
-  * days_since_last_collection: time elapse since the most recent test (in days)
-  * days_to_next_collection: time to next collection (in days).
+  * days_since_earliest_collection: the time elapse since the earliest test (in days, if this is the first test of a patient, take 0)
+  * days_since_last_collection: time elapse since the most recent test (in days, if this is the first test of a patient, take 0)
+  * days_to_next_collection: time to next collection (in days, if this is the last test of a patient, take 0).
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -1449,32 +1485,33 @@ df %>% filter( days_since_earliest_collection > 0) %>%
 
 <br>
 
-#### There are several individuals with more than one testing results on the same day.
+### Table `r tab.counter`. There are several individuals with more than one testing results on the same day. (TBC)
 ```{r}
+tab.counter <- tab.counter + 1
 temp_id <- (df %>% group_by(StudyID, collection_date) %>% count() %>% filter(n>1))$StudyID 
 
 df %>% filter(StudyID %in% temp_id) %>%
   select(StudyID, collection_date, `Collection Department`, tested_viruses, positive_viruses, encounter_type, `Admit Date`) %>%
-  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "13px"),
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
             groupBy = "StudyID", defaultExpanded = T)
 ```
 
 <br>
 
-### Mark testing records as cases and control, Current strategies:
-
+### Mark testing records as cases and controls
 (reference: https://pubmed.ncbi.nlm.nih.gov/36454733/)
+
 #### Test-positive cases: 
-  * A case of test-positive is defined as a positive RSV test.
+  * A case of test-positive is defined as a positive RSV test. 
 
 #### Test-negative controls:
-  * We define test-negative control as a negative RSV test 
-    + collected at any time if this patient was tested only once, OR
-    + collected > 7 days prior this patient's next test AND collected > 7 days after this patient's last test (if the patient was tested multiple times)
+  * Define test-negative control as a negative RSV test 
+    + collected at any time if this patient was tested only once, **OR**
+    + collected > 7 days prior this patient's next test **AND** collected > 7 days after this patient's last test (if the patient was tested multiple times)
 
 #### Other notes:
   * An individual patient is allowed to contribute as both case and control, as the analysis is to be conducted at test-level, instead of patient-level. 
-  * Each patient can contribute to up to three negative tests (controls).
+  * Each patient can contribute to up to three negative tests (controls) (TBC).
   *	If a person had more than one negative test within 7-day period, one random test was selected during the period as a control.
 
 ```{r echo = T}
@@ -1542,10 +1579,42 @@ df <- df %>%
   mutate(randomly_selected_control = ifelse(testID %in% randomly.selected.controls.ids, 1, 0)) %>% 
   mutate(case_control = ifelse(randomly_selected_control == 1, "control", case_control))
 
+# # individual patients contribute more than three controls (n = 17)
+# df %>% 
+#   group_by(StudyID) %>%
+#   count(case_control) %>% 
+#   filter(n>1) %>%
+#   arrange(desc(n), StudyID) %>% 
+#   filter(case_control == "control") %>%
+#   filter(n > 3)
+
+```
+
+### Table `r tab.counter` Take a look at number of cases and controls.
+```{r}
+tab.counter <- tab.counter + 1
 df %>% count(case_control) %>% 
   mutate(perc = round(n/nrow(df)*100, 1)) %>%
-  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "13px")) 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px")) 
 ```
+
+<br>
+
+### Table `r tab.counter`. There are patients who contributed 2 cases.
+#### (TBC) Should we include all test-positive records as cases? Or if the two test-positive results for the same individual happened within 7(?) days, we only keep one case for this individual?
+```{r}
+tab.counter <- tab.counter + 1
+
+# there are several patients who contributed two cases:
+id_multi_cases <- (df %>% group_by(StudyID) %>% count(case_control) %>% filter(case_control == "case") %>% filter(n>1))$StudyID
+
+df %>% filter(StudyID %in% id_multi_cases) %>% 
+  select(StudyID, collection_date, tested_viruses, positive_viruses, case_control) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            groupBy = "StudyID", defaultExpanded = T) 
+```
+
+<br>
 
 ```{r}
 if(save_recoded_dataset){
