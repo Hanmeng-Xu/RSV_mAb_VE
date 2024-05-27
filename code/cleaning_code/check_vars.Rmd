@@ -33,7 +33,7 @@ save_recoded_dataset <- FALSE
 ```{r}
 tab.counter <- tab.counter + 1
 # read in data from onedrive shared folder 
-df <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_deid_2024_may.xlsx", sheet = "Dataset")
+df <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/RSV_deid_2024_may.xlsx", sheet = "Dataset")
 
 n_unique <- length(unique(df$StudyID))
 n_single_test <- df %>% group_by(StudyID) %>% count() %>% filter(n==1) %>% nrow()
@@ -48,11 +48,16 @@ There are `r n_unique` patients in the original main dataset. There are `r n_sin
 
 <br>
 
-### Figure `r fig.counter`. Display age at testing and remove records above 1 yo.
-  * Remove records with (collection date - DOB) > 12 months.
+### Figure `r fig.counter`. Display age at testing
+  * Age eligibility:   
+    + it is possible that they are > 1yo when being tested
+    + the mAb is available in October 2023, and is recommended for those under 8 month (CDC), so in theory, only those born after February 2023 are eligible for mAb, these should be included.
+    + however, as mAb is also recommended for older high risk infants, also check those born before February and see if they have high risk.
   * Generated age_at_testing_in_days, age_at_testing_in_months.
 ```{r}
 fig.counter <- fig.counter + 1
+
+df <- df %>% mutate(DOB = as.Date(DOB))
 
 df <- df %>% mutate(age_at_test_in_days = as.numeric(as.Date(`Collection Date`) - as.Date(DOB))) %>% 
   mutate(age_at_test_in_months = round(age_at_test_in_days / (365/12), 1))
@@ -66,12 +71,10 @@ df %>%
   annotate("text", x= 13, y = 280, label = "12 months", color = "red")
 
 # remove > 12 months 
-df <- df %>% filter(age_at_test_in_months <= 12)
+# df <- df %>% filter(age_at_test_in_months <= 12)
 ```
 
-#### There are `r n_above1yo` testing records having age > 12 months at the time of testing. Removed these records from current dataset.
-
-
+#### There are `r n_above1yo` testing records having age > 12 months at the time of testing. Currently haven't removed any records. (TBC)
 
 
 <br>
@@ -115,13 +118,13 @@ df %>%  count(Sex) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 
 df <- df %>% 
-  mutate(Sex = ifelse(Sex == "Unknown", NA, Sex))
+  mutate(Sex = ifelse(Sex == "Unknown" | Sex == "Choose not to disclose", NA, Sex))
 
 ```
 
 <br>
 
-### Figure `r fig.counter`. Sex & Age at testing (after removing age at testing > 1 yo records )
+### Figure `r fig.counter`. Sex & Age at testing (after removing age at testing > 1 yo)
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -164,10 +167,13 @@ Sample collection date: `r min_cd` ~ `r max_cd`.
 #### From these variables, generate variables:
   * tested_xxx: indicating whether this record was tested for certain virus
   * positive_xxx: the testing results for certain virus (flu,rhino,hmpv,adeno,parainfluenza,rsv).
+  * positive_otherviruses: binary variable indicating that this record was tested positive for other viruses other than RSV (if == 1, this record was tested positive for other viruses, but this record can be either negative and positive for RSV.)
   
 #### From tested_xxx and positive_xxx, generate new variable:
   * tested_viruses: string class, listing viruses tested for a record (some viruses are not listed here, like covid)
   * positive_viruses: string class, listing viruses tested positive for a record (some viruses are not listed here, like covid)
+
+#### what tests are included in "RESPIRATORY VIRUS PCR PANEL     (BH GH LMW Q YH) [LAB3444]"? (TBC, we discussed this, this might not be that important. )
 ```{r}
 # generate "whether tested" variables 
 df <- df %>% 
@@ -236,6 +242,17 @@ df <- cbind.data.frame(df,
   mutate(positive_viruses = str_replace(positive_viruses, " flu", "")) %>% 
   mutate(positive_viruses = ifelse(positive_viruses == "", NA, positive_viruses))
 
+
+# create a variable positive_otherviruses indicating this record tested positive for other viruses 
+df <- df %>% 
+  mutate(positive_otherviruses = ifelse(positive_fluA == 1 | 
+                                          positive_fluB == 1 |
+                                          positive_flu == 1 |
+                                          positive_rhino == 1 |
+                                          positive_hmpv == 1 |
+                                          positive_adeno == 1 |
+                                          positive_parainfluenza == 1, 1, 0))
+
 ```
 
 ### Table `r tab.counter`. Viral test (taken by a record)
@@ -289,7 +306,8 @@ data.frame(
 <br>
 
 ### Table `r tab.counter`. Admit Date
-There might be some uncertainty about this variable so we might not trust this 100%. Here calculated time difference (in days) between Admit Date and sample collection. (this variable might not be that useful in the actual analyses.)
+#### Generate variable days_btw_admit_collect = collection_date - Admit date. If <0, collection before admission.
+  * if the admission date and collection date are 7 days away, we consider this admission is "related" to the testing result (TBC).
 ```{r}
 tab.counter <- tab.counter + 1
  
@@ -299,23 +317,29 @@ df %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 
 # those admitted after sample collection
-temp <- df %>% mutate(days_btw_admit_collect = as.numeric(as.Date(`Collection Date`) - as.Date(`Admit Date`))) %>% 
-  filter(days_btw_admit_collect  < 0) %>% arrange(StudyID, `Collection Date`)
+df <- df %>% mutate(days_btw_admit_collect = as.numeric(as.Date(`Collection Date`) - as.Date(`Admit Date`))) 
 
-# those with long interval between admission and sample collection
-temp <- df %>% mutate(days_btw_admit_collect = as.numeric(as.Date(`Collection Date`) - as.Date(`Admit Date`))) %>% 
-  filter(days_btw_admit_collect  >= 90) %>% arrange(StudyID, `Collection Date`)
+df <- df %>% mutate(admit_date = as.Date(`Admit Date`))
 
-# df %>% select(`Collection Date`,`Admit Date`, `Encounter Type`) %>% 
-#   filter(as.Date(`Collection Date`) != as.Date(`Admit Date`))
+n_temp <- df %>% filter(days_btw_admit_collect > 7) %>% nrow()
+n_temp_case <- df %>% filter(days_btw_admit_collect > 7) %>% filter(positive_rsv == 1) %>% nrow()
+#n_temp_mab <- df %>% filter(days_btw_admit_collect > 7) %>% filter(rsv_mab == 1) %>% nrow()
 
+
+
+# a <- df %>% filter(days_btw_admit_collect > 7) %>% 
+#   mutate(type = ifelse(DOB == admit_date & DOB == date_icu_admit, "ICU admission on DOB", NA)) %>%
+#   select(248, 1:247)
+# 
+# write.csv(a, "../../data/days_btw_admit_collect_morethan7days.csv", row.names = F)
 ```
+
+There are `r n_temp` records whose collection date was more than 7 days after admission date. Among, these, there are/is `r n_temp_case` RSV+ case, 25 were admitted to ICU on DOB: (how to do with these? TBC)
 
 <br>
 
-
 ### Table `r tab.counter`. Hosp LoS
-Length of Stay (in days) of hospitalization recorded in the main dataset. **Can this be a measure of severity?**
+Length of Stay (in days) of hospitalization originally recorded in the main dataset.
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -328,19 +352,27 @@ n_missing_hosp_los <- df %>% filter(is.na(`Hosp LoS`)) %>% nrow()
   * Hosp LOS for "Newborn" encounter type: range from 3-287 days
   
 #### There are `r n_missing_hosp_los` records missing Hosp LoS: (these are all records from BH EMERGENCY DEPARTMENT)
-**Can I recode the Hosp LoS of these to 1 (TBC)?**
+After discussing, these are all outpaitent, thus no hosp stay.
 ```{r}
 df %>% filter(is.na(`Hosp LoS`)) %>% arrange(StudyID) %>% 
   select(StudyID, collection_date, `Collection Department`, tested_viruses, positive_viruses) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
+#### Generate new variable hosp_los:
+  * if the encounter type is outpatient ---> NA, as there should be hosp stay for outpatient.
+```{r}
+df <- df %>% 
+  mutate(hosp_los = ifelse(`Encounter Type` %in% c("Emergency", "Outpatient", "Hospital Outpatient Surgery", "Specimen"), NA, `Hosp LoS`) )
 
+df %>% count(hosp_los) %>% arrange(hosp_los) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
   
 
 <br>
 
 ### Table `r tab.counter`. Collection Department & Admission location
-#### Recode these two to sample_source variable (might not be very useful?):
+#### Recode these two to sample_source variable (might not use this variable?):
   * if Admission Location is available, use Admission Location;
   * if Admission Location is not available, use Collection Department.
 ```{r}
@@ -368,7 +400,7 @@ df %>% group_by(`Encounter Type`) %>% count() %>% arrange(desc(n)) %>%
 <br>
 
 ### Table `r tab.counter`. Records missing Encounter type 
-There are 35 missings for original "encounter type" variable. Most seem to be from LABs or DRAW STATION except one record from "NE PEDS OLD SAYBROOK", **can I classify them as "Specimen" ? (TBC)**
+There are records missings for original "encounter type" variable. Most from LABs or DRAW STATION except one record from "NE PEDS OLD SAYBROOK" (after discussing, this one is an outpatient record). Fill in these missings with "Specimen" or "Outpatient".
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -376,6 +408,13 @@ df %>% select(StudyID, `Collection Department`, `Admission Location`, `Encounter
   filter(is.na(`Encounter Type`)) %>% 
   arrange(`Admission Location`) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+df <- df %>%
+  mutate(`Encounter Type` = case_when(
+    is.na(`Encounter Type`) & str_detect(`Collection Department`, "MAIN LAB|DRAW STATION|SPECIMENS") ~ "Specimen",
+    is.na(`Encounter Type`) & `Collection Department` == "NE PEDS OLD SAYBROOK" ~ "Outpatient",
+    TRUE ~ `Encounter Type`
+  ))
 ```
 
 <br>
@@ -385,10 +424,10 @@ df %>% select(StudyID, `Collection Department`, `Admission Location`, `Encounter
   * Emergency ---> outpatient
   * Outpatient ---> outpatient
   * Hospital Outpatient Surgery ---> outpatient 
-  * Specimen ---> outpatient (TBC)
+  * Specimen ---> outpatient
   * Inpatient ---> inpatient 
-  * Observation ---> inpatient? (TBC)
-  * Newborn ---> inpatient? (TBC)
+  * Observation ---> inpatient
+  * Newborn ---> inpatient
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -411,8 +450,8 @@ df %>% count(encounter_type) %>% rename(n_records = n) %>%
 ### Table `r tab.counter`. ICU admission date
 #### Generated new variables:
   + date_icu_admit: the same as ICU Admission Date but in Date class, N/A as NA;
-  + days_btw_collection_icu: days between sample collection and ICU admission.
-  + date_icu_admit_related: ICU admission that can be linked with the testing result (**within a week of sample collection date? TBC**)
+  + days_btw_collection_icu: days between sample collection and ICU admission (collection_date - ICU admission)
+  + date_icu_admit_related: ICU admission that can be linked with the testing result (**within a week of sample collection date? yes, discussed. TBC**)
   + icu_admitted_related: binary variable indicating whether the icu can be related to the testing result (within a week of testing)
   
 ```{r}
@@ -432,7 +471,21 @@ n_icu <- nrow(df %>% filter(!is.na(date_icu_admit))) # total ICU admissions
 n_icu_unrelated <- nrow(df %>% filter(days_btw_collection_icu > 7))
 ```
 
-#### Out of `r n_icu` ICU admissions, `r n_icu_unrelated` have ICU admission more than 7 days before or after sample collection date. We assume that these are ICU admissions that are not related to the testing result. Then the left ICU admissions:
+#### Out of `r n_icu` ICU admissions, `r n_icu_unrelated` have ICU admission more than 7 days before or after sample collection date. Check these: (1 RSV+, 9 took mAb)
+```{r}
+df %>% filter(days_btw_collection_icu > 7) %>% 
+  select(StudyID, DOB, admit_date, date_icu_admit, collection_date,days_btw_collection_icu, positive_rsv) %>% 
+  mutate(type = ifelse(DOB == admit_date & DOB == date_icu_admit, 
+                       "ICU admission on DOB", NA)) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+# a <- df %>% filter(days_btw_collection_icu > 7) %>% 
+#   mutate(type = ifelse(DOB == admit_date & DOB == date_icu_admit, "ICU admission on DOB", NA)) %>%
+#   select(248, 1:247)
+# write.csv(a, "../../data/days_btw_ICUadmit_collect_morethan7days.csv", row.names = F)
+```
+
+<br>
 
 ### Figure `r fig.counter`. ICU admission date 
 These are ICU admissions within 7 days of sample collection date.
@@ -527,7 +580,8 @@ df %>% count(gest_age_cat) %>% arrange(desc(n)) %>% rename(n_records = n) %>%
 
 ### Figure `r fig.counter`. Birth weight
   * PENDING: Generate birth_weight_kg (numeric), low_birth_weight (binary). Low birth weight is defined as a birth weight of less than 2500 g (up to and including 2499 g), as per the World Health Organization (WHO).
-  * what is the unit of original variable Birth Wgt? Haven't generated new variables (TBC?).
+  * what is the unit of original variable Birth Wgt (ounce??)? Haven't generated new variables (TBC?).
+  * After confirming, generate risk factor indicating low birth weight.
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -539,26 +593,91 @@ df %>%
 <br>
 
 ### Table `r tab.counter`. Race and Ethnicity (PENDING)
-There are many conflicting answers (TBC?). Here are the unique answers for Race variable:
+There are many conflicting answers. Here are the unique answers for Race variable:
 ```{r}
 tab.counter <- tab.counter + 1
 
 df %>% count(Race) %>% arrange(desc(n)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
+<br>
+
+#### To classify race, generate new variable "race". I use dominant answers to classify, e.g. if a records answered both black and white, use black.
+```{r}
+df %>%
+  mutate(race = case_when(Race %in% c("White") ~ "White",
+                          Race %in% c("I Do Not See My Race Listed Here") ~ "unknown"))
+
+df <- df %>% 
+  mutate(race = case_when(str_detect(Race, "Black") ~ "Black",
+                          Race %in% c("White",
+                                      "I Do Not See My Race Listed Here\r\nWhite",
+                                      "White\r\nI Do Not Know",
+                                      "White\r\nI Do Not See My Race Listed Here",
+                                      "I Do Not Know\r\nWhite",
+                                      "I Prefer Not To Share\r\nWhite",
+                                      "White\r\nI Do Not Know\r\nI Do Not See My Race Listed Here") ~ "White",
+                          Race %in% c("Asian",
+                                      "Asian\r\nWhite",
+                                      "White\r\nAsian",
+                                      "Asian\r\nI Do Not Know",
+                                      "Asian Indian",
+                                      "Asian\r\nPacific Islander\r\nWhite",
+                                      "Asian\r\nI Do Not Know\r\nWhite") ~ "Asian",
+                          Race %in% c("Pacific Islander\r\nWhite",
+                                      "White\r\nPacific Islander",
+                                      "Pacific Islander\r\nI Do Not See My Race Listed Here",
+                                      "American Indian or Native American",
+                                      "Middle Eastern or Northern African",
+                                      "Pacific Islander",
+                                      "American Indian or Native American\r\nI Do Not Know",
+                                      "Other\r\nI Do Not See My Race Listed Here",
+                                      "I Do Not See My Race Listed Here",
+                                      "I Do Not See My Race Listed Here\r\nI Do Not Know",
+                                      "I Do Not Know\r\nI Do Not See My Race Listed Here",
+                                      "I Do Not See My Race Listed Here\r\nI Prefer Not To Share",
+                                      "White\r\nAmerican Indian or Native American",
+                                      "Other") ~ "Other",
+                          Race %in% c("I Do Not Know",
+                                      "I Prefer Not To Share") ~ "unknown")) %>%
+  # combine Asian to "Other" category
+  mutate(race = ifelse(race == "Asian", "Other", race)) %>%
+  mutate(race = ifelse(is.na(race), "unknown", race))
+
+df %>% count(race) %>% 
+  mutate(perc = round(n/nrow(df) * 100,1)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
 
 ```{r}
 df %>% count(Ethnicity) %>% arrange(desc(n)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
+#### Combine race and ethnicity into one variable: generate this new variable called "race_ethnicity" (pending, TBC)
+```{r}
+df <- df %>% 
+  mutate(ethnicity = case_when(Ethnicity %in% c("Not Hispanic or Latino/a/e") ~ "Not Hispanic or Latino",
+                               Ethnicity %in% c("Hispanic or Latino/a/e", 
+                                                 "Puerto Rican",
+                                                 "Mexican, Mexican American, Chicano/a") ~ "Hispanic or Latino",
+                               Ethnicity %in% c("I Prefer Not To Share",
+                                                "I Do Not Know") ~ "unknown"))
+  
+```
+
+
+
 <br>
 
 ### Table `r tab.counter`. Primary Insurance & Payor
 #### Generate new variable insurance_type (TBC)
   *	Medicare / Medicaid ---> public insurance 
-  *	All others ---> private insurance 
+  *	Most others ---> private insurance 
   *	Who are considered as “uninsured”? (patients having NA for Primary Insurance and Payor variable? n = 17)
+  * After discussing, made some changes to classification. I googled the Insurance and reclassified some.
+Aim to use this variable to see the SES background of patients.
 ```{r}
 tab.counter <- tab.counter + 1
 df <- df %>% 
@@ -567,6 +686,15 @@ df <- df %>%
                                     insurance_concat == "NA NA" ~ "uninsured",
                                     TRUE ~ "private")) %>%
   select(-insurance_concat)
+
+
+# update: after discussing, reclassify insurance_type for some records:
+# LOCAL 1199SEIU BENEFIT FUNDS --> uninsured
+# MCD MGD” (Medicare Coverage Database managed ?) are Medicare (public insurance)
+df <- df %>%
+  mutate(insurance_type = case_when(`Primary Insurance` == "LOCAL 1199SEIU BENEFIT FUNDS" ~ "uninsured",
+                                    str_detect(`Primary Insurance`, "MCD MGD") | str_detect(Payor, "MCD MGD") ~ "public",
+                                    TRUE ~ insurance_type))
 
 
 df %>% count(insurance_type) %>% arrange(desc(n)) %>% rename(n_records = n) %>% 
@@ -611,13 +739,13 @@ df %>% ggplot() +
 
 <br>
 
-### Below are text patterns to detect risk factors (i.e. underlying conditions) and respiratory symptoms from the following variables (TBC):
-  * Medical History (past?) ---> risk factors
-  * Problem List (past?) ---> risk factors
-  * Primary Problem (current? TBC) ---> risk factors & respiratory symptoms
-  * ED Dx (current? TBC) ---> risk factors & respiratory symptoms
-  * Admit Dx (current? TBC) ---> risk factors & respiratory symptoms
-  * Hospital Problem List (current? TBC) ---> risk factors & respiratory symptoms
+### Below are text patterns to detect risk factors (i.e. underlying conditions) and respiratory symptoms from the following variables:
+  * Medical History (past) ---> risk factors
+  * Problem List (past + current, more from past based on descriptions) ---> risk factors
+  * Primary Problem (current) ---> risk factors & respiratory symptoms
+  * ED Dx (current) ---> risk factors & respiratory symptoms
+  * Admit Dx (current) ---> risk factors & respiratory symptoms
+  * Hospital Problem List (current + past, more from current) ---> risk factors & respiratory symptoms
   
 #### I detected the presence of these patterns to see if a record has certain risk factor (based on past and current encounters) or show a certain respiratory symptom in current encounter (based on diagnosis records of current encounter). The new variables generated are binary variables. For example, med_hist_congen_heart means that based on description in the "Medical History" variable, this records had congenital heart disease, which can be a risk factor for more severe outcomes.
 ```{r, echo = T}
@@ -634,6 +762,12 @@ pattern_anemia <- paste(c("anemia",
                           "Hemoglobin S trait"), 
                         collapse = "|")
 
+pattern_blood <- paste(pattern_anemia, 
+                       c("hemangioma",
+                         "Thrombus of aorta",
+                         "hypoglycemia"),
+                       collapse = "|")
+
 pattern_asthma <- paste(c("asthma",
                           "Reactive airway disease"),
                         collapse = "|")
@@ -646,10 +780,27 @@ pattern_liver <- paste(c("liver cell damage",
                          "Liver transplanted"), 
                        collapse = "|")
 
+pattern_immunodeficiency <- paste(c("liver transplanted",
+                                    "transplant",
+                                    "leukemia"),
+                                  collapse = "|")
+
 pattern_cvd <- paste(c("Atrial septa",
                        "ventricular septa",
                  "Patent ductus arteriosus",
                  "Cardiac abnormality",
+                 "Cardiac hypertrophy", # added 
+                 "cardiac septal defect", # added 
+                 "fetal cardiac arrhythmia", # added
+                 "Cardiac dysfunction", # added
+                 "cardiac arrest", # added 
+                 "Stenosis of right pulmonary artery", # added
+                 "Stenosis of left pulmonary artery", # added
+                 "Stenosis of pulmonary artery", # added
+                 "Cardiac abnormality", # added
+                 "cardiac surgery", # added
+                 "cardiac valve disease", # added 
+                 "Cardiac anomaly", # added 
                  "Congenital heart disease",
                  "Partial AV canal",
                  "Ventricular septa",
@@ -657,18 +808,16 @@ pattern_cvd <- paste(c("Atrial septa",
                  "double outlet right ventricle",
                  "Dextrocardia",
                  "DORV",
-                 "Cardiac abnormality",
-                 "Heart murmur",
-                 "Heart murmur of newborn",
+                 # "Heart murmur",
+                 # "Heart murmur of newborn",
+                 # "murmur",
                  "heart problem",
                  "Mitral regurgitation",
                  "Kawasaki disease",
                  "Coarctation of aorta",
-                 "hemangioma",
+                 # "hemangioma", # moved to blood group
                  "atrial septal defect",
-                 "Thrombus of aorta",
-                 "cardiac",
-                 "murmur",
+                 # "Thrombus of aorta", # moved to blood group
                  "premature atrial contraction",
                  "Cardiomegaly",
                  "Myocarditis",
@@ -683,27 +832,29 @@ pattern_cvd <- paste(c("Atrial septa",
                  collapse = "|")
 
 
-pattern_leukemia <- "leukemia"
+# pattern_leukemia <- "leukemia" # combined with immunodeficiency group
 
-pattern_gi <- paste(c("Abdominal distension",
-                      "Acid reflux",
-                      "gastroesophageal reflux",
+
+pattern_gi <- paste(c(
+                      # "Abdominal distension",
+                      # "Acid reflux",
+                      # "gastroesophageal reflux",
                       "GI disease",
-                      "Constipation",
+                      # "Constipation",
                       "Esophageal atresia",
                       "Gastric perforation",
-                      "Gastric reflux",
+                      # "Gastric reflux",
                       "Hirschsprung",
-                      "GERD",
+                      # "GERD",
                       "Colostomy",
                       "necrotizing enterocolitis",
                       "Intestinal perforation",
                       "Intussusception",
                       "Biliary atresia",
                       "Ileostomy",
-                      "esophageal reflux",
+                      # "esophageal reflux",
                       "Pyloric stenosis",
-                      "Reflux gastritis",
+                      # "Reflux gastritis",
                       "Gastric bleed",
                       "GI bleed",
                       "gastritis"),
@@ -723,7 +874,7 @@ pattern_congen_heart <- paste(c("Congenital heart disease",
                                 "Coarctation of aorta",
                                 "Hypoplastic aortic arch",
                                 "atrial septal defect",
-                                "Thrombus of aorta",
+                                # "Thrombus of aorta", # moved to blood group
                                 "Heart abnormality",
                                 "Cardiomegaly",
                                 "patent ductus arteriosus",
@@ -735,7 +886,7 @@ pattern_congen_heart <- paste(c("Congenital heart disease",
                                 "supraventricular tachycardia",
                                 "Partial AV canal",
                                 "Atrial septa",
-                                "Heart murmur of newborn",
+                                # "Heart murmur of newborn",
                                 "supraventricular tachycardia",
                                 "Partial anomalous pulmonary venous return",
                                 "aortic coarctation",
@@ -744,23 +895,36 @@ pattern_congen_heart <- paste(c("Congenital heart disease",
                                 "Tricuspid atresia with normal great arteries"),
                               collapse = "|")
 
+pattern_cardiac <- paste(pattern_cvd, 
+                         pattern_congen_heart,
+                         c("Pulmonary valve atresia",
+                           "Partial anomalous pulmonary venous return",
+                           "pulmonary artery stenosis",
+                           "pulmonary artery",
+                           "Peripheral pulmonic stenosis",
+                           "Pulmonary valve stenosis",
+                           "Pulmonary hypertension"),
+                         collapse = "|")
 
-pattern_pulmonary <- paste(c("Pulmonary valve atresia",
-                             "Chronic cough",
+
+pattern_pulmonary <- paste(c(
+                             # "Pulmonary valve atresia", # moved to cardiac
+                             # "Chronic cough",
                              "CPAM",
                              "Cystic fibrosis",
                              "Bronchopulmonary dysplasia",
                              "Protracted bacterial bronchitis",
                              "reactive airway disease",
                              "Pneumothorax",
-                             "Pulmonary hypertension",
-                             "Pulmonary valve stenosis",
+                             #"Pulmonary hypertension",
+                             #"Pulmonary valve stenosis",
                              "Bronchomalacia",
-                             "Tracheomalacia",
-                             "Partial anomalous pulmonary venous return",
-                             "pulmonary artery stenosis",
-                             "pulmonary artery",
-                             "Peripheral pulmonic stenosis"),
+                             "Tracheomalacia"
+                             # "Partial anomalous pulmonary venous return", 
+                             # "pulmonary artery stenosis",
+                             # "pulmonary artery",
+                             # "Peripheral pulmonic stenosis"
+                             ),
                            collapse = "|")
 
 pattern_down <- paste(c("Down syndrome",
@@ -813,38 +977,45 @@ pattern_postterm <- paste(c("post-term",
 
 # for upper respiratory tract diseases 
 pattern_URTI <- paste(c("Abnormal breathing",
+                        "Breathing difficulty",
+                        "difficulty breathing",
+                        "breathing problem",
+                        "Shortness of breath",
                         "cough",
                         "Acute obstructive laryngitis",
                         "pharyngitis",
                         "otitis media",
                         "upper respiratory infection",
                         "upper respiratory tract infection",
-                        "Breathing difficulty",
-                        "Breathing problem",
+                        "upper resp. tract infection",
+                        "upper resp. infection",
                         "croup",
-                        "Laryngotracheobronchitis",
                         "Nasopharyngitis",
                         "Pain in throat",
                         "reactive airway disease",
                         "Nasal congestion",
-                        "wheezing",
+                        # "wheezing", # moved to LRT
                         "sore throat",
                         "URI",
-                        "Shortness of breath",
                         "Laryngeal stridor"), 
                       collapse = "|")
 
 # for lower respiratory tract diseases:
 pattern_LRTI <- paste(c("bronchiolitis",
+                        "Laryngotracheobronchitis",
+                        "Bronchospasm",
                         "Acute chest syndrome",
                         "Acute hypoxic respiratory failure",
                         "Pneumonia",
                         "Hypoxia",
                         "Hypoxemia",
-                        "Bronchospasm",
                         "Lower resp. tract infection",
+                        "Lower resp. infection",
+                        "Lower respiratory tract infection",
+                        "Lower respiratory infection",
                         "Hypoxemic respiratory failure",
-                        "Acute respiratory failure with hypoxia"), 
+                        "Acute respiratory failure with hypoxia",
+                        "wheezing"), 
                       collapse = "|")
 
 
@@ -857,14 +1028,16 @@ pattern_wheezing <- "wheezing"
 pattern_breathing <- paste(c("Abnormal breathing",
                              "Breathing difficulty",
                              "difficulty breathing",
-                             "breathing problem"), 
+                             "Shortness of breath",
+                             "breathing problem",
+                             "apnea"), 
                            collapse = "|")
 
 pattern_bronchiolitis <- "bronchiolitis|Bronchospasm"
 
 pattern_sepsis <- "sepsis"
 
-pattern_apnea <- "apnea"
+# pattern_apnea <- "apnea"
 
 # some general terms used to detect if the record's encounter is suspcted resp infection
 pattern_suspect_resp_general <- paste(c("respiratory",
@@ -876,9 +1049,10 @@ pattern_suspect_resp_general <- paste(c("respiratory",
                                         "flu",
                                         "viral illness",
                                         "Viral syndrome",
-                                        "nasal",
-                                        "asthma",
-                                        "decreased activity"), 
+                                        "nasal"
+                                        #"asthma",
+                                        #"decreased activity"
+                                        ), 
                                       collapse = "|")
 ```
 
@@ -891,41 +1065,45 @@ pattern_suspect_resp_general <- paste(c("respiratory",
 # extract risk factors and underlying conditions from `Medical History`
 df <- df %>%
   mutate(med_hist_anemia = case_when(grepl(pattern_anemia, `Medical History`, ignore.case = T) ~ 1)) %>%
+  mutate(med_hist_blood = case_when(grepl(pattern_blood, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_preterm = case_when(grepl(pattern_preterm, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_postterm = case_when(grepl(pattern_postterm, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_asthma = case_when(grepl(pattern_asthma, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_liver = case_when(grepl(pattern_liver, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_cvd = case_when(grepl(pattern_cvd, `Medical History`, ignore.case = T) ~ 1)) %>%
-  mutate(med_hist_leukemia = case_when(grepl(pattern_leukemia, `Medical History`, ignore.case = T) ~ 1)) %>%
+  mutate(med_hist_immunodeficiency = case_when(grepl(pattern_immunodeficiency, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_gi = case_when(grepl(pattern_gi, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_congen_heart = case_when(grepl(pattern_congen_heart, `Medical History`, ignore.case = T) ~ 1)) %>%
+  mutate(med_hist_cardiac = case_when(grepl(pattern_cardiac, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_pulmonary = case_when(grepl(pattern_pulmonary, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_down = case_when(grepl(pattern_down, `Medical History`, ignore.case = T) ~ 1))  %>%
   mutate(med_hist_cvd = ifelse(med_hist_congen_heart == 1 & is.na(med_hist_cvd), 1, med_hist_cvd)) %>%
   mutate(med_hist_earlyterm = case_when(grepl(pattern_earlyterm, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_fullterm = case_when(grepl(pattern_fullterm, `Medical History`, ignore.case = T)  & 
                                            !grepl(pattern_preterm, `Medical History`, ignore.case = T) ~ 1))
-  #mutate(across(med_hist_anemia:med_hist_fullterm, ~ ifelse( (!is.na(`Medical History`) & .x != 1) , 0, .x)))
+  
 
 ```
 
 ```{r}
 ##########################
-### Problem List (past)
+### Problem List (past+current, more from past)
 ##########################
 
 # extract risk factors and underlying conditions from `Problem List`
 
 df <- df %>%
   mutate(prob_list_anemia = case_when(grepl(pattern_anemia, `Problem List`, ignore.case = T) ~ 1)) %>%
+  mutate(prob_list_blood = case_when(grepl(pattern_blood, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_preterm = case_when(grepl(pattern_preterm, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_postterm = case_when(grepl(pattern_postterm, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_asthma = case_when(grepl(pattern_asthma, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_liver = case_when(grepl(pattern_liver, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_cvd = case_when(grepl(pattern_cvd, `Problem List`, ignore.case = T) ~ 1)) %>%
-  mutate(prob_list_leukemia = case_when(grepl(pattern_leukemia, `Problem List`, ignore.case = T) ~ 1)) %>%
+  mutate(prob_list_immunodeficiency = case_when(grepl(pattern_immunodeficiency, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_gi = case_when(grepl(pattern_gi, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_congen_heart = case_when(grepl(pattern_congen_heart, `Problem List`, ignore.case = T) ~ 1)) %>%
+  mutate(prob_list_cardiac = case_when(grepl(pattern_cardiac, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_pulmonary = case_when(grepl(pattern_pulmonary, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_down = case_when(grepl(pattern_down, `Problem List`, ignore.case = T) ~ 1))  %>%
   mutate(prob_list_cvd = ifelse(prob_list_congen_heart == 1 & is.na(prob_list_cvd), 1, prob_list_cvd)) %>%
@@ -936,20 +1114,22 @@ df <- df %>%
 
 ```{r}
 ##################################
-### Primary Problem (current? TBC)
+### Primary Problem (current)
 ##################################
 
 # extract risk factors and underlying conditions from `Primary Problem`
 df <- df %>%
   mutate(prim_prob_anemia = case_when(grepl(pattern_anemia, `Primary Problem`, ignore.case = T) ~ 1)) %>%
+  mutate(prim_prob_blood = case_when(grepl(pattern_blood, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_preterm = case_when(grepl(pattern_preterm, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_postterm = case_when(grepl(pattern_postterm, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_asthma = case_when(grepl(pattern_asthma, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_liver = case_when(grepl(pattern_liver, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_cvd = case_when(grepl(pattern_cvd, `Primary Problem`, ignore.case = T) ~ 1)) %>%
-  mutate(prim_prob_leukemia = case_when(grepl(pattern_leukemia, `Primary Problem`, ignore.case = T) ~ 1)) %>%
+  mutate(prim_prob_immunodeficiency = case_when(grepl(pattern_immunodeficiency, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_gi = case_when(grepl(pattern_gi, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_congen_heart = case_when(grepl(pattern_congen_heart, `Primary Problem`, ignore.case = T) ~ 1)) %>%
+  mutate(prim_prob_cardiac = case_when(grepl(pattern_cardiac, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_pulmonary = case_when(grepl(pattern_pulmonary, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_down = case_when(grepl(pattern_down, `Primary Problem`, ignore.case = T) ~ 1))  %>%
   mutate(prim_prob_cvd = ifelse(prim_prob_congen_heart == 1 & is.na(prim_prob_cvd), 1, prim_prob_cvd)) %>%
@@ -967,28 +1147,29 @@ df <- df %>%
   mutate(prim_prob_wheezing = case_when(grepl(pattern_wheezing, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_breathing = case_when(grepl(pattern_breathing, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_bronchiolitis = case_when(grepl(pattern_bronchiolitis, `Primary Problem`, ignore.case = T) ~ 1)) %>%
-  mutate(prim_prob_sepsis = case_when(grepl(pattern_sepsis, `Primary Problem`, ignore.case = T) ~ 1)) %>%
-  mutate(prim_prob_apnea = case_when(grepl(pattern_apnea, `Primary Problem`, ignore.case = T) ~ 1))
+  mutate(prim_prob_sepsis = case_when(grepl(pattern_sepsis, `Primary Problem`, ignore.case = T) ~ 1))
   # if a record has LRTI and URTI at the same time, record this as LRTI
   # mutate(prim_prob_URTI = case_when(prim_prob_URTI == 1 & is.na(prim_prob_LRTI) ~ 1))
 ```
 
 ```{r}
 ############################
-### ED Dx (current? TBC)
+### ED Dx (current)
 ############################
 
 # extract risk factors and underlying conditions from ED Dx 
 df <- df %>%
   mutate(ED_dx_anemia = case_when(grepl(pattern_anemia, `ED Dx`, ignore.case = T) ~ 1)) %>%
+  mutate(ED_dx_blood = case_when(grepl(pattern_blood, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_preterm = case_when(grepl(pattern_preterm, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_postterm = case_when(grepl(pattern_postterm, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_asthma = case_when(grepl(pattern_asthma, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_liver = case_when(grepl(pattern_liver, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_cvd = case_when(grepl(pattern_cvd, `ED Dx`, ignore.case = T) ~ 1)) %>%
-  mutate(ED_dx_leukemia = case_when(grepl(pattern_leukemia, `ED Dx`, ignore.case = T) ~ 1)) %>%
+  mutate(ED_dx_immunodeficiency = case_when(grepl(pattern_immunodeficiency, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_gi = case_when(grepl(pattern_gi, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_congen_heart = case_when(grepl(pattern_congen_heart, `ED Dx`, ignore.case = T) ~ 1)) %>%
+  mutate(ED_dx_cardiac = case_when(grepl(pattern_cardiac, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_pulmonary = case_when(grepl(pattern_pulmonary, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_down = case_when(grepl(pattern_down, `ED Dx`, ignore.case = T) ~ 1))  %>%
   mutate(ED_dx_cvd = ifelse(ED_dx_congen_heart == 1 & is.na(ED_dx_cvd), 1, ED_dx_cvd)) %>%
@@ -1007,8 +1188,7 @@ df <- df %>%
   mutate(ED_dx_wheezing = case_when(grepl(pattern_wheezing, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_breathing = case_when(grepl(pattern_breathing, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_bronchiolitis = case_when(grepl(pattern_bronchiolitis, `ED Dx`, ignore.case = T) ~ 1)) %>%
-  mutate(ED_dx_sepsis = case_when(grepl(pattern_sepsis, `ED Dx`, ignore.case = T) ~ 1)) %>%
-  mutate(ED_dx_apnea = case_when(grepl(pattern_apnea, `ED Dx`, ignore.case = T) ~ 1))
+  mutate(ED_dx_sepsis = case_when(grepl(pattern_sepsis, `ED Dx`, ignore.case = T) ~ 1))
   # if a record has LRTI and URTI at the same time, record this as LRTI
   # mutate(ED_dx_URTI = case_when(ED_dx_URTI == 1 & is.na(ED_dx_LRTI) ~ 1))
   
@@ -1016,20 +1196,22 @@ df <- df %>%
 
 ```{r}
 ############################
-### Admit Dx (current? TBC)
+### Admit Dx (current)
 ############################
 
 # extract risk factors and underlying conditions from Admit Dx
 df <- df %>% 
   mutate(admit_dx_anemia = case_when(grepl(pattern_anemia, `Admit Dx`, ignore.case = T) ~ 1)) %>%
+  mutate(admit_dx_blood = case_when(grepl(pattern_blood, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_preterm = case_when(grepl(pattern_preterm, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_postterm = case_when(grepl(pattern_postterm, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_asthma = case_when(grepl(pattern_asthma, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_liver = case_when(grepl(pattern_liver, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_cvd = case_when(grepl(pattern_cvd, `Admit Dx`, ignore.case = T) ~ 1)) %>%
-  mutate(admit_dx_leukemia = case_when(grepl(pattern_leukemia, `Admit Dx`, ignore.case = T) ~ 1)) %>%
+  mutate(admit_dx_immunodeficiency = case_when(grepl(pattern_immunodeficiency, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_gi = case_when(grepl(pattern_gi, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_congen_heart = case_when(grepl(pattern_congen_heart, `Admit Dx`, ignore.case = T) ~ 1)) %>%
+  mutate(admit_dx_cardiac = case_when(grepl(pattern_cardiac, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_pulmonary = case_when(grepl(pattern_pulmonary, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_down = case_when(grepl(pattern_down, `Admit Dx`, ignore.case = T) ~ 1))  %>%
   mutate(admit_dx_cvd = ifelse(admit_dx_congen_heart == 1 & is.na(admit_dx_cvd), 1, admit_dx_cvd)) %>%
@@ -1047,28 +1229,29 @@ df <- df %>%
   mutate(admit_dx_wheezing = case_when(grepl(pattern_wheezing, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_breathing = case_when(grepl(pattern_breathing, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_bronchiolitis = case_when(grepl(pattern_bronchiolitis, `Admit Dx`, ignore.case = T) ~ 1)) %>%
-  mutate(admit_dx_sepsis = case_when(grepl(pattern_sepsis, `Admit Dx`, ignore.case = T) ~ 1)) %>%
-  mutate(admit_dx_apnea = case_when(grepl(pattern_apnea, `Admit Dx`, ignore.case = T) ~ 1))
+  mutate(admit_dx_sepsis = case_when(grepl(pattern_sepsis, `Admit Dx`, ignore.case = T) ~ 1))
   # if a record has LRTI and URTI at the same time, record this as LRTI
   # mutate(admit_dx_URTI = case_when(admit_dx_URTI == 1 & is.na(admit_dx_LRTI) ~ 1))
 ```
 
 ```{r}
 #########################################
-### Hospital Problem List (current? TBC)
+### Hospital Problem List (current+past,more from current)
 ########################################
 
 # extract risk factors and underlying conditions from Admit Dx
 df <- df %>% 
   mutate(hosp_prob_anemia = case_when(grepl(pattern_anemia, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
+  mutate(hosp_prob_blood = case_when(grepl(pattern_blood, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_preterm = case_when(grepl(pattern_preterm, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_postterm = case_when(grepl(pattern_postterm, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_asthma = case_when(grepl(pattern_asthma, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_liver = case_when(grepl(pattern_liver, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_cvd = case_when(grepl(pattern_cvd, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
-  mutate(hosp_prob_leukemia = case_when(grepl(pattern_leukemia, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
+  mutate(hosp_prob_immunodeficiency = case_when(grepl(pattern_immunodeficiency, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_gi = case_when(grepl(pattern_gi, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_congen_heart = case_when(grepl(pattern_congen_heart, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
+  mutate(hosp_prob_cardiac = case_when(grepl(pattern_cardiac, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_pulmonary = case_when(grepl(pattern_pulmonary, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_down = case_when(grepl(pattern_down, `Hospital Problem List`, ignore.case = T) ~ 1))  %>%
   mutate(hosp_prob_cvd = ifelse(hosp_prob_congen_heart == 1 & is.na(hosp_prob_cvd), 1, hosp_prob_cvd)) %>%
@@ -1087,8 +1270,7 @@ df <- df %>%
   mutate(hosp_prob_wheezing = case_when(grepl(pattern_wheezing, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_breathing = case_when(grepl(pattern_breathing, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_bronchiolitis = case_when(grepl(pattern_bronchiolitis, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
-  mutate(hosp_prob_sepsis = case_when(grepl(pattern_sepsis, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
-  mutate(hosp_prob_apnea = case_when(grepl(pattern_apnea, `Hospital Problem List`, ignore.case = T) ~ 1))
+  mutate(hosp_prob_sepsis = case_when(grepl(pattern_sepsis, `Hospital Problem List`, ignore.case = T) ~ 1))
   # if a record has LRTI and URTI at the same time, record this as LRTI
   # mutate(hosp_prob_URTI = case_when(hosp_prob_URTI == 1 & is.na(hosp_prob_LRTI) ~ 1))
 
@@ -1107,18 +1289,22 @@ df <- df %>%
 df <- df %>% 
   mutate(risk_factor_anemia = case_when(med_hist_anemia == 1 | prob_list_anemia == 1 | prim_prob_anemia == 1 | 
                                           ED_dx_anemia == 1 | admit_dx_anemia == 1 | hosp_prob_anemia == 1 ~ 1)) %>%
+  mutate(risk_factor_blood = case_when(med_hist_blood == 1 | prob_list_blood == 1 | prim_prob_blood == 1 | 
+                                          ED_dx_blood == 1 | admit_dx_blood == 1 | hosp_prob_blood == 1 ~ 1)) %>%
   mutate(risk_factor_asthma = case_when(med_hist_asthma == 1 | prob_list_asthma == 1 | prim_prob_asthma == 1 | 
                                           ED_dx_asthma == 1 | admit_dx_asthma == 1 | hosp_prob_asthma == 1 ~ 1)) %>%
   mutate(risk_factor_liver = case_when(med_hist_liver == 1 | prob_list_liver == 1 | prim_prob_liver == 1 | 
                                           ED_dx_liver == 1 | admit_dx_liver == 1 | hosp_prob_liver == 1 ~ 1)) %>%
   mutate(risk_factor_cvd = case_when(med_hist_cvd == 1 | prob_list_cvd == 1 | prim_prob_cvd == 1 | 
                                           ED_dx_cvd == 1 | admit_dx_cvd == 1 | hosp_prob_cvd == 1 ~ 1)) %>%
-  mutate(risk_factor_leukemia = case_when(med_hist_leukemia == 1 | prob_list_leukemia == 1 | prim_prob_leukemia == 1 | 
-                                          ED_dx_leukemia == 1 | admit_dx_leukemia == 1 | hosp_prob_leukemia == 1 ~ 1)) %>%
+  mutate(risk_factor_immunodeficiency = case_when(med_hist_immunodeficiency == 1 | prob_list_immunodeficiency == 1 | prim_prob_immunodeficiency == 1 | 
+                                          ED_dx_immunodeficiency == 1 | admit_dx_immunodeficiency == 1 | hosp_prob_immunodeficiency == 1 ~ 1)) %>%
   mutate(risk_factor_gi = case_when(med_hist_gi == 1 | prob_list_gi == 1 | prim_prob_gi == 1 | 
                                           ED_dx_gi == 1 | admit_dx_gi == 1 | hosp_prob_gi == 1 ~ 1)) %>%
   mutate(risk_factor_congen_heart = case_when(med_hist_congen_heart == 1 | prob_list_congen_heart == 1 | prim_prob_congen_heart == 1 | 
                                           ED_dx_congen_heart == 1 | admit_dx_congen_heart == 1 | hosp_prob_congen_heart == 1 ~ 1)) %>%
+  mutate(risk_factor_cardiac = case_when(med_hist_cardiac == 1 | prob_list_cardiac == 1 | prim_prob_cardiac == 1 | 
+                                          ED_dx_cardiac == 1 | admit_dx_cardiac == 1 | hosp_prob_cardiac == 1 ~ 1)) %>%
   mutate(risk_factor_pulmonary = case_when(med_hist_pulmonary == 1 | prob_list_pulmonary == 1 | prim_prob_pulmonary == 1 | 
                                           ED_dx_pulmonary == 1 | admit_dx_pulmonary == 1 | hosp_prob_pulmonary == 1 ~ 1)) %>%
   mutate(risk_factor_down = case_when(med_hist_down == 1 | prob_list_down == 1 | prim_prob_down == 1 | 
@@ -1156,8 +1342,7 @@ df <- df %>%
   mutate(symp_wheezing = case_when(prim_prob_wheezing == 1 | ED_dx_wheezing == 1 | admit_dx_wheezing == 1 | hosp_prob_wheezing == 1 ~ 1)) %>%
   mutate(symp_breathing = case_when(prim_prob_breathing == 1 | ED_dx_breathing == 1 | admit_dx_breathing == 1 | hosp_prob_breathing == 1 ~ 1)) %>%
   mutate(symp_bronchiolitis = case_when(prim_prob_bronchiolitis == 1 | ED_dx_bronchiolitis == 1 | admit_dx_bronchiolitis == 1 | hosp_prob_bronchiolitis == 1 ~ 1)) %>%
-  mutate(symp_sepsis = case_when(prim_prob_sepsis == 1 | ED_dx_sepsis == 1 | admit_dx_sepsis == 1 | hosp_prob_sepsis == 1 ~ 1)) %>%
-  mutate(symp_apnea = case_when(prim_prob_apnea == 1 | ED_dx_apnea == 1 | admit_dx_apnea == 1 | hosp_prob_apnea == 1 ~ 1))
+  mutate(symp_sepsis = case_when(prim_prob_sepsis == 1 | ED_dx_sepsis == 1 | admit_dx_sepsis == 1 | hosp_prob_sepsis == 1 ~ 1)) 
 ```
 
 <br>
@@ -1167,11 +1352,13 @@ df <- df %>%
 ```{r}
 tab.counter <- tab.counter + 1
 
-df %>% filter(is.na(symp_URT_distress) & is.na(symp_LRT_distress) & is.na(symp_fever) & is.na(symp_cough) & is.na(symp_wheezing) & is.na(symp_breathing) & is.na(symp_bronchiolitis) & is.na(symp_sepsis & is.na(symp_apnea)) &
+df.uncertain <- df %>% filter(is.na(symp_URT_distress) & is.na(symp_LRT_distress) & is.na(symp_fever) & is.na(symp_cough) & is.na(symp_wheezing) & is.na(symp_breathing) & is.na(symp_bronchiolitis) & is.na(symp_sepsis) &
                      grepl(pattern_suspect_resp_general, `Primary Problem`,ignore.case = T) %in% c(NA, FALSE)  & 
                      grepl(pattern_suspect_resp_general, `ED Dx`, ignore.case = T) %in% c(NA, FALSE) & 
                      grepl(pattern_suspect_resp_general, `Admit Dx`,ignore.case = T) %in% c(NA, FALSE) & 
-                     grepl(pattern_suspect_resp_general, `Hospital Problem List`,ignore.case = T) %in% c(NA, FALSE)                   ) %>% 
+                     grepl(pattern_suspect_resp_general, `Hospital Problem List`,ignore.case = T) %in% c(NA, FALSE)                   )
+
+df.uncertain %>%
   select(StudyID, `Primary Problem`, `ED Dx`, `Admit Dx`, `Hospital Problem List`) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
             columns = list(
@@ -1186,18 +1373,20 @@ df %>% filter(is.na(symp_URT_distress) & is.na(symp_LRT_distress) & is.na(symp_f
 
 
 ### Table `r tab.counter`. Summarize extracted risk factors 
-Each record can have multiple risk factors.
+Each record can have multiple risk factors. For gestational age (preterm...), I also used the information in gest_age_cat to classify if this record is preterm/early term, etc.
 ```{r}
 tab.counter <- tab.counter + 1
 
 data.frame(
   anemia = nrow(df %>% filter(risk_factor_anemia == 1)),
+  blood = nrow(df %>% filter(risk_factor_blood == 1)),
   asthma = nrow(df %>% filter(risk_factor_asthma == 1)),
   liver_disease = nrow(df %>% filter(risk_factor_liver == 1)),
   cvd = nrow(df %>% filter(risk_factor_cvd == 1)),
-  leukemia = nrow(df %>% filter(risk_factor_leukemia == 1)),
+  immunodeficiency = nrow(df %>% filter(risk_factor_immunodeficiency == 1)),
   GI_disease = nrow(df %>% filter(risk_factor_gi == 1)),
   congenital_heart_disease = nrow(df %>% filter(risk_factor_congen_heart == 1)),
+  cardiac = nrow(df %>% filter(risk_factor_cardiac == 1)),
   pulmonary_disease = nrow(df %>% filter(risk_factor_pulmonary == 1)),
   down_syndrome = nrow(df %>% filter(risk_factor_down == 1)),
   early_term = nrow(df %>% filter(risk_factor_earlyterm == 1)),
@@ -1205,11 +1394,37 @@ data.frame(
   preterm = nrow(df %>% filter(risk_factor_preterm == 1)),
   post_term = nrow(df %>% filter(risk_factor_postterm == 1))
 ) %>%
-  pivot_longer(cols = 1:13, names_to = "risk_factor", values_to = "n_records") %>%
+  pivot_longer(cols = 1:15, names_to = "risk_factor", values_to = "n_records") %>%
   arrange(desc(n_records)) %>%
   mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 
+```
+
+<br>
+
+### Table `r tab.counter`. Some more processing of gestational age 
+#### From
+  * gest_age_cat (original variable in the dataset);
+  * risk_factor_fullterm, risk_factor_earlyterm, risk_factor_preterm, risk_factor_postterm (extracted from medical history..)
+```{r}
+tab.counter <- tab.counter + 1
+# As some information about gestational age was extracted from medical history, there might be some inaccuracy, here first detect if there is individuals who was marked 1 in both cats. 
+df <- df %>% 
+  mutate(risk_factor_gestage = case_when(
+    !is.na(gest_age_cat) ~ gest_age_cat,
+    is.na(gest_age_cat) & risk_factor_earlyterm == 1 ~ "early term",
+    is.na(gest_age_cat) & risk_factor_fullterm == 1 ~ "full term",
+    is.na(gest_age_cat) & risk_factor_postterm == 1 ~ "post term",
+    is.na(gest_age_cat) & risk_factor_preterm == 1 ~ "preterm"
+  )) 
+
+df %>% count(risk_factor_gestage) %>% arrange(desc(n)) %>% 
+  mutate(perc = round(n / nrow(df)*100,1)) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+
+# a <- df %>% filter(is.na(risk_factor_gestage)) 
+# write.csv(a, "../../data/missing_gestage.csv", row.names = F)
 ```
 
 <br>
@@ -1227,10 +1442,9 @@ data.frame(
   symp_wheezing = nrow(df %>% filter(symp_wheezing == 1)),
   symp_breathing = nrow(df %>% filter(symp_breathing == 1)),
   symp_bronchiolitis = nrow(df %>% filter(symp_bronchiolitis == 1)),
-  symp_sepsis = nrow(df %>% filter(symp_sepsis == 1)),
-  symp_apnea = nrow(df %>% filter(symp_apnea == 1))
+  symp_sepsis = nrow(df %>% filter(symp_sepsis == 1))
 ) %>%
-  pivot_longer(cols = 1:9, names_to = "symp", values_to = "n_records") %>%
+  pivot_longer(cols = 1:8, names_to = "symp", values_to = "n_records") %>%
   arrange(desc(n_records)) %>%
   mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -1246,7 +1460,7 @@ data.frame(
   * Admit Dx
   * Hospital Problem List
 
-This table is a subset of table 20 above. (all records here are from outpatient)
+This table is a subset of table 20 above. (all records here are from outpatient) For these records we can't be sure these are hospitalizations related to respiratory infection.
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -1282,7 +1496,7 @@ There are `r n_temp` records whose mom received RSV maternal vaccine. (self repo
 ### Read in Nirsevimab tab from excel
 This tab contains nirsevimab information, if there is discordance between the main tab and this tab about the nirsevimab, use this tab's information. (There is no duplicate in the nirsevimab tab).
 ```{r}
-df.nir <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_deid_2024_may.xlsx", sheet = "nirsevimab")
+df.nir <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/RSV_deid_2024_may.xlsx", sheet = "nirsevimab")
 
 # merge nirsevimab tab with main tab 
 df <- df %>% select(-`mAb Date`, - Nirsevimab) %>% 
@@ -1290,15 +1504,18 @@ df <- df %>% select(-`mAb Date`, - Nirsevimab) %>%
 ```
 
 ### Figure `r fig.counter`. See how many mAb were administered after sample collection
+#### Generate new variable days_btw_mab_collection (mAb date - collection date), >0 means immunization after sample collection.
+(days_btw_mab_collection can be used to see how protection from mAb wanes over time.)
 ```{r}
 fig.counter <- fig.counter + 1
 
 df <- df %>% 
+  mutate(mab_date = as.Date(`mAb date`)) %>%
   mutate(days_btw_mab_collection = as.numeric(as.Date(`mAb date`) - collection_date)) 
 
 df %>% 
   filter(!is.na(days_btw_mab_collection)) %>%
-  select(StudyID, collection_date, `mAb date`, days_btw_mab_collection) %>%
+  select(StudyID, collection_date, mab_date, days_btw_mab_collection) %>%
   ggplot() + 
   geom_histogram(aes(x = days_btw_mab_collection), color = "black", fill ="white") +
   geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
@@ -1313,7 +1530,7 @@ df %>%
   filter(!is.na(days_btw_mab_collection)) %>%
   filter(days_btw_mab_collection >= -7) %>%
   arrange(days_btw_mab_collection) %>%
-  select(StudyID,  days_btw_mab_collection,`mAb date`, collection_date) %>%
+  select(StudyID,  days_btw_mab_collection,mab_date, collection_date) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px")) 
   
 ```
@@ -1386,20 +1603,20 @@ df %>%
   geom_histogram(aes(x = age_at_mab_in_days), color = "black", fill = "white") + theme_classic()
 ```
 
-
 <br>
 
 ### Read in oxygen volume tab and merge with main tab
 ```{r}
-df.oxygen <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_deid_2024_may.xlsx", sheet = "oxygen")
+df.oxygen <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/RSV_deid_2024_may.xlsx", sheet = "oxygen")
 
 # merge oxygen data with main tab
 df <- df %>% 
-  left_join(df.oxygen %>% select(StudyID, `Extreme Flowsheet Value`), by = "StudyID")
+  left_join(df.oxygen, by = "StudyID")
 ```
 
 ### Figure `r fig.counter`. Maximum oxygen flow rate
-#### Generate new variable max_oxygen_flowrate (unit: L/min), which threshold to use to indicate severe outcome? TBC
+#### Generate new variable max_oxygen_flowrate (unit: L/min), which threshold to use to indicate severe outcome? (after discussing, 1.5L/min can be used as a threshold to indicate severe disease.)
+  * Also need to note that, there is no date in the oxygen tab, so for those patients with multiple visits, we cannot sure which record should be linked with the oxygen order.
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -1412,6 +1629,24 @@ df %>% ggplot() +
   annotate("text", x = 16, y = 120, label = paste0("median=", median(df$max_oxygen_flowrate, na.rm = T)), color = "red")
 
 ```
+#### Also, from "Order Questions" variable in the oxygen tab, extract whether there was CPAP (continuous positive airway pressure), BiPAP (Bilevel positive airway pressure), HFNC (high-flow nasal cannula)... ordered for each records, if there was, this is also an indication of severe disease.
+
+#### Then, patients with max_oxygen_flowrate > 1.5L/min and patients who ordered high flow oxygen (based on order questions) were deemed "used high flow oxygen", generate a new variable called highflow_oxygen.
+```{r}
+pattern_oxygen <- paste(c("cpap",
+                          "Bi-level",
+                          "HFNC"),
+                        collapse = "|")
+df <- df %>% 
+  mutate(ordered_highflow = ifelse(grepl(pattern_oxygen, `Order Questions`, ignore.case = T), 1, 0))
+
+df <-  df %>% 
+  mutate(highflow_oxygen = ifelse(max_oxygen_flowrate > 1.5 | ordered_highflow == 1, 1, 0))
+
+df %>% count(highflow_oxygen) %>% 
+   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
 
 <br>
 <br>
@@ -1491,9 +1726,11 @@ tab.counter <- tab.counter + 1
 temp_id <- (df %>% group_by(StudyID, collection_date) %>% count() %>% filter(n>1))$StudyID 
 
 df %>% filter(StudyID %in% temp_id) %>%
-  select(StudyID, collection_date, `Collection Department`, tested_viruses, positive_viruses, encounter_type, `Admit Date`) %>%
+  select(StudyID, collection_date, `Collection Department`, positive_viruses, rsv_mab, encounter_type, `Admit Date`) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
             groupBy = "StudyID", defaultExpanded = T)
+
+a <- df %>% filter(StudyID %in% temp_id) 
 ```
 
 <br>
@@ -1618,12 +1855,57 @@ df %>% filter(StudyID %in% id_multi_cases) %>%
 
 ```{r}
 if(save_recoded_dataset){
-  write.csv(df, "/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/RSV_mAb.csv", row.names = F)
+  write.csv(df, "/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/RSV_mAb.csv", row.names = F)
 }
+```
+
+<br>
+
+### Table `r tab.counter`. briefly look at risk factors by mAb status
+```{r}
+tab.counter <- tab.counter + 1
+library(table1)
+# table1(): https://cran.r-project.org/web/packages/table1/vignettes/table1-examples.html
+
+
+pvalue <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    if (is.numeric(y)) {
+        # For numeric variables, perform a standard 2-sample t-test
+        p <- t.test(y ~ g)$p.value
+    } else {
+        # For categorical variables, perform a chi-squared test of independence
+        p <- chisq.test(table(y, g))$p.value
+    }
+    # Format the p-value, using an HTML entity for the less-than sign.
+    # The initial empty string places the output on the line below the variable label.
+    c("", sub("<", "&lt;", format.pval(p, digits=3, eps=0.001)))
+}
+
+
+table1( ~ factor(Sex) + 
+          age_at_test_in_months + 
+          factor(encounter_type) +
+          factor(insurance_type) +
+          factor(risk_factor_gestage) +
+          factor(risk_factor_cvd) +
+          factor(risk_factor_gi) +
+          factor(risk_factor_pulmonary) +
+          factor(risk_factor_asthma) +
+          factor(risk_factor_anemia) 
+        | rsv_mab, data = df, overall= F,
+          extra.col=list(`P-value`=pvalue))
+
 ```
 
 
 
+
+
+
+<br>
 
 
 
