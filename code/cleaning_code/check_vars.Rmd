@@ -590,6 +590,7 @@ df %>%
   ggplot() +
   geom_histogram(aes(x = birth_weight), color = "black", fill = "white") + theme_classic()
 ```
+
 <br>
 
 ### Table `r tab.counter`. Race and Ethnicity (PENDING)
@@ -600,14 +601,11 @@ tab.counter <- tab.counter + 1
 df %>% count(Race) %>% arrange(desc(n)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
+
 <br>
 
 #### To classify race, generate new variable "race". I use dominant answers to classify, e.g. if a records answered both black and white, use black.
 ```{r}
-df %>%
-  mutate(race = case_when(Race %in% c("White") ~ "White",
-                          Race %in% c("I Do Not See My Race Listed Here") ~ "unknown"))
-
 df <- df %>% 
   mutate(race = case_when(str_detect(Race, "Black") ~ "Black",
                           Race %in% c("White",
