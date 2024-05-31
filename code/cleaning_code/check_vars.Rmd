@@ -124,7 +124,7 @@ df <- df %>%
 
 <br>
 
-### Figure `r fig.counter`. Sex & Age at testing (after removing age at testing > 1 yo)
+### Figure `r fig.counter`. Sex & Age at testing 
 ```{r}
 fig.counter <- fig.counter + 1
 
@@ -593,7 +593,7 @@ df %>%
 
 <br>
 
-### Table `r tab.counter`. Race and Ethnicity (PENDING)
+### Table `r tab.counter`. Race and Ethnicity
 There are many conflicting answers. Here are the unique answers for Race variable:
 ```{r}
 tab.counter <- tab.counter + 1
@@ -605,7 +605,7 @@ df %>% count(Race) %>% arrange(desc(n)) %>%
 <br>
 
 #### To classify race, generate new variable "race". I use dominant answers to classify, e.g. if a records answered both black and white, use black.
-```{r}
+```{r echo = T}
 df <- df %>% 
   mutate(race = case_when(str_detect(Race, "Black") ~ "Black",
                           Race %in% c("White",
@@ -647,14 +647,19 @@ df %>% count(race) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
-
 ```{r}
 df %>% count(Ethnicity) %>% arrange(desc(n)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
-#### Combine race and ethnicity into one variable: generate this new variable called "race_ethnicity" (pending, TBC)
-```{r}
+#### Combine race and ethnicity into one variable: generate this new variable called "race_ethnicity" 
+  * Hispanic & not black & not white ---> hispanic 
+  * Hispanic & other/unknown race ---> hispanic
+  * Black (any ethnicity) ---> Black 
+  * white (any ethnicity) ---> white 
+  * other race & not Hispanic/unknown ethnicity ---> other 
+  * other race & not Hispanic/unknown ethnicity ---> unknown
+```{r echo = T}
 df <- df %>% 
   mutate(ethnicity = case_when(Ethnicity %in% c("Not Hispanic or Latino/a/e") ~ "Not Hispanic or Latino",
                                Ethnicity %in% c("Hispanic or Latino/a/e", 
@@ -662,7 +667,21 @@ df <- df %>%
                                                  "Mexican, Mexican American, Chicano/a") ~ "Hispanic or Latino",
                                Ethnicity %in% c("I Prefer Not To Share",
                                                 "I Do Not Know") ~ "unknown"))
-  
+
+# tab the two variable 
+table(df$race, df$ethnicity) 
+
+# combine race and ethnicity
+df <- df %>% 
+  mutate(race_ethnicity = case_when(race == "Black" ~ "Black",
+                                    race == "White" ~ "White",
+                                    race %in% c("Other", "unknown") & ethnicity %in% c("Hispanic or Latino") ~ "Hispanic or Latino",
+                                    race == "Other" & ethnicity %in% c("Not Hispanic or Latino", "unknown") ~ "Other",
+                                    race == "unknown" & ethnicity %in% c("Not Hispanic or Latino", "unknown") ~ "unknown",
+                                    TRUE ~ "unknown"))
+
+df %>% count(race_ethnicity) %>% arrange(desc(n)) %>% mutate(perc = round(n/nrow(df)*100,1)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
 
