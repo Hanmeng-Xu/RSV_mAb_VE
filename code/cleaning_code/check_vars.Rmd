@@ -653,12 +653,14 @@ df %>% count(Ethnicity) %>% arrange(desc(n)) %>%
 ```
 
 #### Combine race and ethnicity into one variable: generate this new variable called "race_ethnicity" 
+#### Method 1 to combine race and ethnicity:
   * Hispanic & not black & not white ---> hispanic 
   * Hispanic & other/unknown race ---> hispanic
   * Black (any ethnicity) ---> Black 
   * white (any ethnicity) ---> white 
   * other race & not Hispanic/unknown ethnicity ---> other 
   * other race & not Hispanic/unknown ethnicity ---> unknown
+
 ```{r echo = T}
 df <- df %>% 
   mutate(ethnicity = case_when(Ethnicity %in% c("Not Hispanic or Latino/a/e") ~ "Not Hispanic or Latino",
@@ -668,10 +670,8 @@ df <- df %>%
                                Ethnicity %in% c("I Prefer Not To Share",
                                                 "I Do Not Know") ~ "unknown"))
 
-# tab the two variable 
-table(df$race, df$ethnicity) 
 
-# combine race and ethnicity
+# combine race and ethnicity (Method 1)
 df <- df %>% 
   mutate(race_ethnicity = case_when(race == "Black" ~ "Black",
                                     race == "White" ~ "White",
@@ -684,7 +684,21 @@ df %>% count(race_ethnicity) %>% arrange(desc(n)) %>% mutate(perc = round(n/nrow
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
+<br>
 
+#### Method 2 to combine race and ethnicity:
+```{r echo = T}
+df <- df %>% 
+  mutate(race_ethnicity_2 = case_when(ethnicity == "Hispanic or Latino" ~ "Hispanic or Latino",
+                                      race == "Black" & ethnicity == "Not Hispanic or Latino" ~ "Black non-Hispanic",
+                                      race == "Other" & ethnicity == "Not Hispanic or Latino" ~ "Other non-Hispanic",
+                                      race == "White" & ethnicity == "Not Hispanic or Latino" ~ "White non-Hispanic",
+                                      TRUE ~ "unknown"))
+df %>% count(race_ethnicity_2) %>% arrange(desc(n)) %>% mutate(perc = round(n/nrow(df)*100,1)) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+  
+  
 
 <br>
 
@@ -1738,6 +1752,9 @@ df %>% filter( days_since_earliest_collection > 0) %>%
 <br>
 
 ### Table `r tab.counter`. There are several individuals with more than one testing results on the same day. (TBC)
+  * 130582917,130759159: removed the emergency one and kept the inpatient one.
+  * 130618601: kept the one collected in emergency department
+  * 130696938,130701204,130726098,130751253,130755351: the two records are very similar, kept the one collected in "BH FAIRFIELD URGENT CARE".
 ```{r}
 tab.counter <- tab.counter + 1
 temp_id <- (df %>% group_by(StudyID, collection_date) %>% count() %>% filter(n>1))$StudyID 
@@ -1747,7 +1764,24 @@ df %>% filter(StudyID %in% temp_id) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
             groupBy = "StudyID", defaultExpanded = T)
 
-a <- df %>% filter(StudyID %in% temp_id) 
+df <- df %>% 
+  # 130582917 (emergency)
+  filter(StudyID != 130582917 | `Encounter Type` != "Emergency") %>%
+  # 130618601 (keep the one from emergency department) 
+  filter(StudyID != 130618601 | `Collection Department` != "LMH EMERGENCY DEPARTMENT") %>%
+  # 130696938 
+  filter(StudyID != 130696938 | collection_date != as.Date("2023-12-21") | `Collection Department` != "YNH EMERGENCY PEDIATRIC") %>%
+  # 130701204
+  filter(StudyID != 130701204 | collection_date != as.Date("2024-3-29") | `Collection Department` != "BH EMERGENCY DEPARTMENT") %>%
+  # 130726098
+  filter(StudyID != 130726098 | `Accession #` != "23Y-280VI0020") %>%
+  # 130751253 
+  filter(StudyID != 130751253 | `Collection Department` != "BH EMERGENCY DEPARTMENT") %>%
+  # 130755351
+  filter(StudyID != 130755351 | collection_date != as.Date("2024-3-14") | `Accession #` != "24B-074MI0425") %>%
+  # 130759159
+  filter(StudyID != 130759159 | collection_date != as.Date("2024-1-13") | `Encounter Type` != "Emergency") 
+  
 ```
 
 <br>
