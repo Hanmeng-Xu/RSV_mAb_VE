@@ -308,6 +308,7 @@ data.frame(
 ### Table `r tab.counter`. Admit Date
 #### Generate variable days_btw_admit_collect = collection_date - Admit date. If <0, collection before admission.
   * if the admission date and collection date are 7 days away, we consider this admission is "related" to the testing result (TBC).
+  * if days_btw_admit_collect > 7 days, mark encounter_type from "inpatient" to "inpatient_unrelated" (see below).
 ```{r}
 tab.counter <- tab.counter + 1
  
@@ -359,7 +360,7 @@ df %>% filter(is.na(`Hosp LoS`)) %>% arrange(StudyID) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 #### Generate new variable hosp_los:
-  * if the encounter type is outpatient ---> NA, as there should be hosp stay for outpatient.
+  * if the encounter type is outpatient ---> NA, as there should not be hosp stay for outpatient.
 ```{r}
 df <- df %>% 
   mutate(hosp_los = ifelse(`Encounter Type` %in% c("Emergency", "Outpatient", "Hospital Outpatient Surgery", "Specimen"), NA, `Hosp LoS`) )
@@ -428,6 +429,7 @@ df <- df %>%
   * Inpatient ---> inpatient 
   * Observation ---> inpatient
   * Newborn ---> inpatient
+  * if days_btw_admit_collect > 7 days, change from "inpatient" to "inpatient_unrelated".
 ```{r}
 tab.counter <- tab.counter + 1
 
@@ -438,7 +440,8 @@ df <- df %>%
                                     `Encounter Type` == "Observation" ~ "inpatient",
                                     `Encounter Type` == "Newborn" ~ "inpatient",
                                     `Encounter Type` == "Outpatient" ~ "outpatient",
-                                    `Encounter Type` == "Hospital Outpatient Surgery" ~ "outpatient"))
+                                    `Encounter Type` == "Hospital Outpatient Surgery" ~ "outpatient")) %>%
+  mutate(encounter_type = ifelse(days_btw_admit_collect > 7, "inpatient_unrelated", encounter_type))
 
 df %>% count(encounter_type) %>% rename(n_records = n) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -449,10 +452,12 @@ df %>% count(encounter_type) %>% rename(n_records = n) %>%
 
 ### Table `r tab.counter`. ICU admission date
 #### Generated new variables:
-  + date_icu_admit: the same as ICU Admission Date but in Date class, N/A as NA;
-  + days_btw_collection_icu: days between sample collection and ICU admission (collection_date - ICU admission)
-  + date_icu_admit_related: ICU admission that can be linked with the testing result (**within a week of sample collection date? yes, discussed. TBC**)
-  + icu_admitted_related: binary variable indicating whether the icu can be related to the testing result (within a week of testing)
+  * date_icu_admit: the same as ICU Admission Date but in Date class, N/A as NA;
+  * days_btw_collection_icu: days between sample collection and ICU admission (collection_date - ICU admission)
+  * icu_admitted: categorical variable indicating whether the icu can be related to the testing result (within a week of testing, TBC), taking values of:
+    + yes
+    + yes_unrelated: days_btw_collection_icu > 7
+    + no
   
 ```{r}
 tab.counter <- tab.counter + 1
@@ -460,9 +465,9 @@ tab.counter <- tab.counter + 1
 df <- df %>% 
   mutate(date_icu_admit = as.Date(`ICU Admission Date`, "%m/%d/%Y")) %>%
   mutate(days_btw_collection_icu = as.numeric(as.Date(`Collection Date`) - date_icu_admit)) %>% 
-  mutate(date_icu_admit_related = case_when(days_btw_collection_icu <= 7 ~ date_icu_admit)) %>%
-  mutate(icu_admitted_related = case_when(!is.na(date_icu_admit_related) ~ 1,
-                                          !is.na(date_icu_admit) & is.na(date_icu_admit_related) ~ 0))
+  mutate(icu_admitted = case_when(days_btw_collection_icu <= 7 ~ "yes",
+                                  !is.na(date_icu_admit) & days_btw_collection_icu > 7 ~ "yes_unrelated",
+                                  TRUE ~ "no"))
 
 df %>% count(days_btw_collection_icu) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -493,8 +498,9 @@ These are ICU admissions within 7 days of sample collection date.
 fig.counter <- fig.counter + 1
 
 df %>% 
+  filter(icu_admitted == "yes") %>%
   ggplot() + 
-  geom_histogram(aes(x = date_icu_admit_related), color = "black", fill = "white") + theme_classic()
+  geom_histogram(aes(x = date_icu_admit), color = "black", fill = "white") + theme_classic()
 ```
 
 <br>
@@ -521,7 +527,7 @@ df <- df %>%
 
 
 df %>%
-  filter(icu_admitted_related == 1) %>%
+  filter(icu_admitted == "yes") %>%
   ggplot() + ggtitle("Only plotting ICU admissions related to the testing \n (within a week of sample collection)") +
   geom_histogram(aes(x = icu_los_days), color = "black", fill = "white")  + theme_classic()
 ```
@@ -532,8 +538,8 @@ Several infants with ICU LOS longer than 1 month:
 ```{r}
 tab.counter <- tab.counter + 1
 
-df %>% filter(icu_admitted_related == 1) %>% filter(icu_los_days > 30)%>% 
-  select(StudyID, `Collection Date`, date_icu_admit_related, icu_los_days) %>%
+df %>% filter(icu_admitted == "yes") %>% filter(icu_los_days > 30)%>% 
+  select(StudyID, `Collection Date`, date_icu_admit, icu_los_days) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
@@ -1458,6 +1464,39 @@ df %>% count(risk_factor_gestage) %>% arrange(desc(n)) %>%
 # write.csv(a, "../../data/missing_gestage.csv", row.names = F)
 ```
 
+#### To avoid confusion, remove risk_factor_earlyterm, risk_factor_fullterm, risk_factor_preterm, risk_factor_postterm, and **only keep categorical variable risk_factor_gestage**.
+```{r}
+df <- df %>% select(-c(risk_factor_earlyterm, risk_factor_fullterm, risk_factor_preterm, risk_factor_postterm))
+```
+
+
+<br>
+
+### Table `r tab.counter`. Check if a record has at least one risk factor
+#### Generate this new variable to be risk_factor_atleastone.
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>%
+  mutate(risk_factor_atleastone = case_when(is.na(risk_factor_anemia) & 
+                                                     is.na(risk_factor_blood) &
+                                                     is.na(risk_factor_asthma) & 
+                                                     is.na(risk_factor_liver) &
+                                                     is.na(risk_factor_cvd) &
+                                                     is.na(risk_factor_immunodeficiency) &
+                                                     is.na(risk_factor_gi) &
+                                                     is.na(risk_factor_congen_heart) &
+                                                     is.na(risk_factor_cardiac) &
+                                                     is.na(risk_factor_pulmonary) &
+                                                     is.na(risk_factor_down) &
+                                              risk_factor_gestage != "preterm" ~ 0,
+                                            TRUE ~ 1))
+
+df %>% count(risk_factor_atleastone) %>% 
+  mutate(perc = round(n / nrow(df)*100,1)) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
 <br>
 
 ### Table `r tab.counter`. Summarize extracted respiratory symptoms
@@ -1498,7 +1537,7 @@ tab.counter <- tab.counter + 1
 df %>% filter(is.na(`ED Dx`) & is.na(`Admit Dx`) & is.na(`Primary Problem`) & is.na(`Hospital Problem List`)) %>%
   filter(`Fever?` == "No" & recent_temp <= 38) %>%
   select(StudyID, `Fever?`, recent_temp, `Medical History`, `Problem List`
-         , icu_admitted_related, encounter_type
+         , icu_admitted, encounter_type
          # `Primary Problem`, `ED Dx`, `Admit Dx`, `Hospital Problem List`
          ) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
@@ -1662,6 +1701,8 @@ df %>% ggplot() +
 ```
 #### Also, from "Order Questions" variable in the oxygen tab, extract whether there was CPAP (continuous positive airway pressure), BiPAP (Bilevel positive airway pressure), HFNC (high-flow nasal cannula)... ordered for each records, if there was, this is also an indication of severe disease.
 
+<br>
+
 #### Then, patients with max_oxygen_flowrate > 1.5L/min and patients who ordered high flow oxygen (based on order questions) were deemed "used high flow oxygen", generate a new variable called highflow_oxygen.
 ```{r}
 pattern_oxygen <- paste(c("cpap",
@@ -1669,13 +1710,24 @@ pattern_oxygen <- paste(c("cpap",
                           "HFNC"),
                         collapse = "|")
 df <- df %>% 
-  mutate(ordered_highflow = ifelse(grepl(pattern_oxygen, `Order Questions`, ignore.case = T), 1, 0))
+  mutate(ordered_highflow = case_when(grepl(pattern_oxygen, `Order Questions`, ignore.case = T) ~ 1, 
+                                      grepl(pattern_oxygen, `Order Questions`, ignore.case = T) == FALSE & !is.na(`Order Questions`) ~ 0))
 
+# max > 1.5 L/min or ordered high flow
 df <-  df %>% 
-  mutate(highflow_oxygen = ifelse(max_oxygen_flowrate > 1.5 | ordered_highflow == 1, 1, 0))
+  mutate(highflow_oxygen = case_when((max_oxygen_flowrate > 1.5 | ordered_highflow == 1) | 
+                                      (is.na(max_oxygen_flowrate) & ordered_highflow == 1) ~  1, 
+                                     (max_oxygen_flowrate <= 1.5 & ordered_highflow == 0) | 
+                                      (is.na(max_oxygen_flowrate) & ordered_highflow == 0) ~ 0))
 
 df %>% count(highflow_oxygen) %>% 
    reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+```{r eval = F}
+# check recoded oxygen variables
+# temp <-df %>% filter(highflow_oxygen == 1) %>% 
+#   select(StudyID, `Order Questions`, ordered_highflow, `Extreme Flowsheet Value`, max_oxygen_flowrate)
 ```
 
 
@@ -1691,7 +1743,7 @@ df.multi.tests <- df %>% filter(StudyID %in% id_multi_tests) %>% arrange(StudyID
 a <- df.multi.tests %>% select(StudyID, `mAb date`,
              collection_date, `Admit Date`, `Hosp LoS`,  `Collection Department`, sample_source,
              tested_viruses, positive_viruses, `Encounter Type`, encounter_type,
-             date_icu_admit_related, icu_admitted_related, icu_los_hours, 
+            icu_admitted, date_icu_admit, icu_los_hours, 
              `Fever?`, `Problem List`, `Primary Problem`, `ED Dx`, `Admit Dx`,`Hospital Problem List`
              ) 
 
@@ -1714,6 +1766,8 @@ df <- df %>%
 # also generate variable nth_test to indicate this is the nth test of the same patient
 df <- df %>% as.data.frame() %>% mutate(nth_test = str_sub(testID, -1))
 ```
+
+
 
 ### Table `r tab.counter`. Time since earliest collection for each patient
 #### if an individual has multiple tests, for each test, generate new variables:
@@ -1783,6 +1837,24 @@ df <- df %>%
   filter(StudyID != 130759159 | collection_date != as.Date("2024-1-13") | `Encounter Type` != "Emergency") 
   
 ```
+
+<br>
+
+### Save the cleaned dataset to be used for analyses.
+
+```{r echo = T}
+save_recoded_dataset <- FALSE
+
+
+if(save_recoded_dataset){
+  write.csv(df, "../../data/clean_data/df.mab.csv", row.names = F)
+}
+
+# colnames <- as.data.frame(colnames(df))
+# write.csv(colnames, "../../data/clean_data/dictionary.csv", row.names = F)
+
+```
+
 
 <br>
 
