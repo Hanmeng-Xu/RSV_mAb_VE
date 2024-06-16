@@ -1,0 +1,2573 @@
+---
+title: "VE of Nirsevimab"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+#### Date: `r Sys.Date()`
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(readxl)
+library(writexl)
+library(reactable)
+library(ggplot2)
+library(stringr)
+library(flextable)
+library(lubridate)
+
+
+library(gtsummary) # for table 1
+library(multcomp)
+library(survival) # for matched case-control
+
+fig.counter <- 1
+tab.counter <- 1
+```
+
+
+```{r}
+# read in dataset
+df <- read.csv("../data/clean_data/df.mab.csv") %>% mutate(collection_date = as.Date(collection_date))
+colnames <- as.data.frame(colnames(df))
+
+source("utils_mAb_VE.R")
+```
+
+
+```{r}
+# add some variables 
+
+# month when tested
+df <- df %>% 
+  mutate(month_when_tested = as.character(month(collection_date, label = T))) %>% 
+  mutate(month_when_tested = ifelse(month_when_tested == "Sep", "Oct", month_when_tested)) %>%
+  mutate(age_at_test_in_months_cat = case_when(
+    age_at_test_in_months < 6 ~ "under 6m",
+    age_at_test_in_months >= 6 & age_at_test_in_months < 12 ~ "6-12m",
+    age_at_test_in_months >= 12 ~ "above 1 yo" 
+  )) %>%
+  mutate(risk_factor_atleastone = case_when(risk_factor_atleastone == 1 ~ "yes",
+                                            risk_factor_atleastone == 0 ~ "no"))
+
+# birth weight in grams
+df <- df %>%  mutate(birth_weight = Birth.Wgt * 28.3)
+
+```
+
+
+### There are totally `r nrow(df)` testing records in the analysis dataset. 
+
+<br>
+
+### Table `r tab.counter`. Study population (testing level)
+  * (TBC) where should we include the "unrelated" hospital admissions and ICU admissions? count them as "outpatient"/"no ICU admission"? (currently doing this, but doesn't really make sense..)
+  * this is assuming that: if mAb was taken before collection date, we count it as immunized. For SSA, need to change it to: if the person took mAb more than 5 days before sample collection, we count it as immunized.
+  * Here, cases are RSV+, and controls are RSV-.
+
+```{r}
+tab.counter <- tab.counter + 1
+
+df_table1 <- df %>%
+  # add dose of mab 
+  mutate(rsv_mab = case_when(rsv_mab_detailed == "100mg before collection" ~ "Yes, 100mg dose",
+                             rsv_mab_detailed == "50mg before collection" ~ "Yes, 50mg dose",
+                             TRUE ~ "No")) %>%
+  dplyr::select(positive_rsv,Sex, age_at_test_in_months, race_ethnicity, encounter_type, risk_factor_gestage, birth_weight, insurance_type, rsv_mab, risk_factor_atleastone, icu_admitted, month_when_tested) %>% 
+  mutate(positive_rsv = case_when(positive_rsv == 1 ~ "Cases (RSV+)",
+                                  positive_rsv == 0 ~ "Controls (RSV-)")) %>%
+  # count "unrelated" hosp and ICU admissions as "no"
+  mutate(encounter_type = ifelse(encounter_type == "inpatient_unrelated", "outpatient", encounter_type)) %>%
+  mutate(icu_admitted = ifelse(icu_admitted == "yes_unrelated", "no", icu_admitted))
+
+table1_testing <- df_table1 %>% 
+  tbl_summary(by = positive_rsv,
+              
+              type = all_continuous() ~ "continuous2",       # indicate that you want to print multiple statistics 
+              statistic = list(all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),                 
+                          all_categorical() ~ "{n} ({p}%)"),
+              
+              digits = list(all_categorical() ~ c(0, 1),
+                            all_continuous() ~ 1),
+              
+              label  = list(  
+                Sex ~ "Sex", 
+                age_at_test_in_months ~ "Age at testing (months)",
+                race_ethnicity ~ "Race and ethnicity",
+                encounter_type ~ "Encounter type",
+                risk_factor_gestage ~ "Gestational age",
+                insurance_type ~ "Insurance type",
+                rsv_mab ~ "mAb status",
+                risk_factor_atleastone ~ "Having at least one risk factor",
+                birth_weight ~ "Birth weight",
+                icu_admitted ~ "ICU admission",
+                month_when_tested ~ "Month tested"
+                ),
+        missing_text = "Missing"
+        #,
+         #     percent = "row"
+        #      missing= "no"
+                      ) %>% 
+  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
+  add_overall(last = F) %>%
+  bold_labels()
+
+
+table1_testing %>% as_flex_table() %>% 
+  flextable::set_table_properties( width = 1, layout = "autofit") 
+  
+```
+
+<br>
+
+
+```{r echo = T}
+confounders <- c("Sex", 
+                 "risk_factor_gestage",
+                 "age_at_test_in_months",
+                 "race_ethnicity",
+                  "insurance_type",
+                  "risk_factor_atleastone",
+                 "month_when_tested",
+                 "birth_weight"
+                  )
+
+```
+
+<br>
+
+### Effectiveness of Nirsevimab (unmatched) {.tabset}
+
+#### Table `r tab.counter`. Against RSV infection (stratified)
+  * Case: RSV+ ; 
+  * Controls: RSV-
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+# define case and control
+df.unmatched <- df %>% mutate(case_control = positive_rsv)
+
+###################
+# VE (unstratified)
+###################
+ve.unmatched.unadj <- regress_unmatch(df.ve = df.unmatched,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.unmatched.adj <- regress_unmatch(df.ve = df.unmatched, 
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+###################
+# VE (stratified)
+###################
+
+# by gestational age
+ve.unmatched.gestage <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                   stratify_by = "risk_factor_gestage")
+
+
+# by sex
+ve.unmatched.sex <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                               stratify_by = "Sex")
+
+# by age at test
+ve.unmatched.agetested <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "age_at_test_in_months_cat")
+
+
+# by race 
+ve.unmatched.race <- regress_unmatch_stratified(df.ve = df.unmatched %>% filter(race_ethnicity != "unknown"), 
+                                                     stratify_by = "race_ethnicity")
+
+# by insurance type 
+ve.unmatched.insurance <- regress_unmatch_stratified(df.ve = df.unmatched %>% filter(insurance_type != "uninsured"), 
+                                                     stratify_by = "insurance_type")
+
+# by risk factor 
+ve.unmatched.riskfactor <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "risk_factor_atleastone")
+
+# combine into one table 
+ve.unmatched.unadj %>% 
+  mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>%
+  cbind(
+    ve.unmatched.adj %>% 
+      mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+      mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+      mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+      dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.adjusted)
+  ) %>% 
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>% 
+  rbind(
+    rbind(
+  
+  ve.unmatched.gestage,
+  ve.unmatched.sex,
+  ve.unmatched.agetested,
+  ve.unmatched.race,
+  ve.unmatched.insurance,
+  ve.unmatched.riskfactor
+) %>% 
+  # filter out NA 
+  #filter(!is.na(ve_ub_unadj)) %>%
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median_unadj, " (", ve_lb_unadj, "-", ve_ub_unadj, ")")) %>%
+  mutate(VE.adjusted = paste0(ve_median_adj, " (", ve_lb_adj, "-", ve_ub_adj, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) 
+  ) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            groupBy = "stratify_by", defaultExpanded = T) 
+  
+```
+
+<br>
+
+#### Table `r tab.counter`. Against all-cause hospitalization (stratified)
+  * Cases: all-cause hospitalization; 
+  * Controls: not hospitalized pateints or outpatient (regardless of testing results)
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+# define case and control
+df.unmatched <- df %>% 
+  mutate(case_control = case_when(encounter_type == "inpatient" ~ 1,
+                                  encounter_type == "outpatient" ~ 0)) %>% 
+  filter(!is.na(case_control)) # 58 unrelated hospitalizations
+
+
+###################
+# VE (unstratified)
+###################
+ve.unmatched.unadj <- regress_unmatch(df.ve = df.unmatched,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.unmatched.adj <- regress_unmatch(df.ve = df.unmatched, 
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+###################
+# VE (stratified)
+###################
+
+# by gestational age
+ve.unmatched.gestage <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                   stratify_by = "risk_factor_gestage")
+
+
+# by sex
+ve.unmatched.sex <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                               stratify_by = "Sex")
+
+# by age at test
+ve.unmatched.agetested <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "age_at_test_in_months_cat")
+
+
+# by race 
+ve.unmatched.race <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "race_ethnicity")
+
+# by insurance type 
+ve.unmatched.insurance <- regress_unmatch_stratified(df.ve = df.unmatched %>% filter(insurance_type != "uninsured"), 
+                                                     stratify_by = "insurance_type")
+
+# by risk factor 
+ve.unmatched.riskfactor <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "risk_factor_atleastone")
+
+# combine into one table 
+ve.unmatched.unadj %>% 
+  mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>%
+  cbind(
+    ve.unmatched.adj %>% 
+      mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+      mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+      mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+      dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.adjusted)
+  ) %>% 
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>% 
+  rbind(
+    rbind(
+  
+  ve.unmatched.gestage,
+  ve.unmatched.sex,
+  ve.unmatched.agetested,
+  ve.unmatched.race,
+  ve.unmatched.insurance,
+  ve.unmatched.riskfactor
+) %>% 
+  # filter out NA 
+  #filter(!is.na(ve_ub_unadj)) %>%
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median_unadj, " (", ve_lb_unadj, "-", ve_ub_unadj, ")")) %>%
+  mutate(VE.adjusted = paste0(ve_median_adj, " (", ve_lb_adj, "-", ve_ub_adj, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) 
+  ) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            groupBy = "stratify_by", defaultExpanded = T) 
+  
+```
+
+<br>
+
+#### Table `r tab.counter`. Against RSV-related hospitalization (stratified)
+  * Cases: RSV+ & hospitalized; 
+  * Controls: RSV- | not hospitalized
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+# define case and control
+df.unmatched <- df %>% 
+  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 ~ 1,
+                                  TRUE ~ 0)) %>% 
+  filter(!is.na(case_control)) # 58 unrelated hospitalizations
+
+
+
+###################
+# VE (unstratified)
+###################
+ve.unmatched.unadj <- regress_unmatch(df.ve = df.unmatched,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.unmatched.adj <- regress_unmatch(df.ve = df.unmatched, 
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+###################
+# VE (stratified)
+###################
+
+# by gestational age
+ve.unmatched.gestage <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                   stratify_by = "risk_factor_gestage")
+
+
+# by sex
+ve.unmatched.sex <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                               stratify_by = "Sex")
+
+# by age at test
+ve.unmatched.agetested <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "age_at_test_in_months_cat")
+
+
+# by race 
+ve.unmatched.race <- regress_unmatch_stratified(df.ve = df.unmatched %>% filter(race_ethnicity!= "unknown"), 
+                                                     stratify_by = "race_ethnicity")
+
+# by insurance type 
+ve.unmatched.insurance <- regress_unmatch_stratified(df.ve = df.unmatched %>% filter(insurance_type != "uninsured"), 
+                                                     stratify_by = "insurance_type")
+
+# by risk factor 
+ve.unmatched.riskfactor <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "risk_factor_atleastone")
+
+# combine into one table 
+ve.unmatched.unadj %>% 
+  mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>%
+  cbind(
+    ve.unmatched.adj %>% 
+      mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+      mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+      mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+      dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.adjusted)
+  ) %>% 
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>% 
+  rbind(
+    rbind(
+  
+  ve.unmatched.gestage,
+  ve.unmatched.sex,
+  ve.unmatched.agetested,
+  ve.unmatched.race,
+  ve.unmatched.insurance,
+  ve.unmatched.riskfactor
+) %>% 
+  # filter out NA 
+  #filter(!is.na(ve_ub_unadj)) %>%
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median_unadj, " (", ve_lb_unadj, "-", ve_ub_unadj, ")")) %>%
+  mutate(VE.adjusted = paste0(ve_median_adj, " (", ve_lb_adj, "-", ve_ub_adj, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) 
+  ) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            groupBy = "stratify_by", defaultExpanded = T) 
+  
+
+```
+
+<br>
+
+#### Table `r tab.counter`. Against severe RSV-related diseases (stratified)
+  * Cases: RSV+ & severe
+  * Controls: others
+  * here severe cases includes: those admitted to ICU or ordered highflow oxygen
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+# define case and control
+df.unmatched <- df %>% 
+  mutate(case_control = case_when(positive_rsv == 1 & (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
+                                  TRUE ~ 0))
+
+###################
+# VE (unstratified)
+###################
+ve.unmatched.unadj <- regress_unmatch(df.ve = df.unmatched,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.unmatched.adj <- regress_unmatch(df.ve = df.unmatched,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+###################
+# VE (stratified)
+###################
+
+# by gestational age
+ve.unmatched.gestage <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                   stratify_by = "risk_factor_gestage")
+
+
+# by sex
+ve.unmatched.sex <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                               stratify_by = "Sex")
+
+# by age at test
+ve.unmatched.agetested <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "age_at_test_in_months_cat")
+
+
+# by race 
+ve.unmatched.race <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                stratify_by = "race_ethnicity")
+
+# by insurance type 
+ve.unmatched.insurance <- regress_unmatch_stratified(df.ve = df.unmatched %>% filter(insurance_type != "uninsured"), 
+                                                     stratify_by = "insurance_type")
+
+# by risk factor 
+ve.unmatched.riskfactor <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "risk_factor_atleastone")
+
+# combine into one table 
+ve.unmatched.unadj %>% 
+  mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>%
+  cbind(
+    ve.unmatched.adj %>% 
+      mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+      mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+      mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+      dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.adjusted)
+  ) %>% 
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>% 
+  rbind(
+    rbind(
+  
+  ve.unmatched.gestage,
+  ve.unmatched.sex,
+  ve.unmatched.agetested,
+  ve.unmatched.race,
+  ve.unmatched.insurance,
+  ve.unmatched.riskfactor
+) %>% 
+  # filter out NA 
+  #filter(!is.na(ve_ub_unadj) & !is.na(ve_ub_adj)) %>%
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median_unadj, " (", ve_lb_unadj, "-", ve_ub_unadj, ")")) %>%
+  mutate(VE.adjusted = paste0(ve_median_adj, " (", ve_lb_adj, "-", ve_ub_adj, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) 
+  ) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            groupBy = "stratify_by", defaultExpanded = T) 
+
+```
+
+
+#### Table `r tab.counter`. Against severe RSV-related hospitalizations (stratified)
+  * Cases: RSV+ & severe & hospitalized
+  * Controls: others
+  * here severe cases includes: those admitted to ICU or ordered highflow oxygen
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+# define case and control
+df.unmatched <- df %>% 
+  mutate(case_control = case_when(positive_rsv == 1 & 
+                                    (icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                    encounter_type == "inpatient" ~ 1,
+                                  TRUE ~ 0))
+
+###################
+# VE (unstratified)
+###################
+ve.unmatched.unadj <- regress_unmatch(df.ve = df.unmatched,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.unmatched.adj <- regress_unmatch(df.ve = df.unmatched,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+###################
+# VE (stratified)
+###################
+
+# by gestational age
+ve.unmatched.gestage <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                   stratify_by = "risk_factor_gestage")
+
+
+# by sex
+ve.unmatched.sex <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                               stratify_by = "Sex")
+
+# by age at test
+ve.unmatched.agetested <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "age_at_test_in_months_cat")
+
+
+# by race 
+ve.unmatched.race <- regress_unmatch_stratified(df.ve = df.unmatched %>% 
+                                                  filter(race_ethnicity != "unknown" & race_ethnicity != "Other"), 
+                                                stratify_by = "race_ethnicity")
+
+# by insurance type 
+ve.unmatched.insurance <- regress_unmatch_stratified(df.ve = df.unmatched %>% 
+                                                       filter(insurance_type != "uninsured"), 
+                                                     stratify_by = "insurance_type")
+
+# by risk factor 
+ve.unmatched.riskfactor <- regress_unmatch_stratified(df.ve = df.unmatched, 
+                                                     stratify_by = "risk_factor_atleastone")
+
+# combine into one table 
+ve.unmatched.unadj %>% 
+  mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>%
+  cbind(
+    ve.unmatched.adj %>% 
+      mutate(across(starts_with("ve"), ~ round(.*100, 1))) %>%
+      mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+      mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+      dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.adjusted)
+  ) %>% 
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>% 
+  rbind(
+    rbind(
+  
+  ve.unmatched.gestage,
+  ve.unmatched.sex,
+  ve.unmatched.agetested,
+  ve.unmatched.race,
+  ve.unmatched.insurance,
+  ve.unmatched.riskfactor
+) %>% 
+  # filter out NA 
+  #filter(!is.na(ve_ub_unadj) & !is.na(ve_ub_adj)) %>%
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median_unadj, " (", ve_lb_unadj, "-", ve_ub_unadj, ")")) %>%
+  mutate(VE.adjusted = paste0(ve_median_adj, " (", ve_lb_adj, "-", ve_ub_adj, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select(stratify_by, strata, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) 
+  ) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            groupBy = "stratify_by", defaultExpanded = T) 
+  
+
+```
+
+<br>
+
+#### Table `r tab.counter`. VE by outcome (severity)
+  * Only doing unstratified for now.
+  * severe cases includes those admitted to ICU and those ordered highflow oxygen.
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+#######################
+# against RSV infection
+#######################
+df.severity <- df %>% mutate(case_control = positive_rsv)
+
+ve.infection.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.infection.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+####################################
+# against all-cause hospitalizations
+####################################
+df.severity <- df %>% mutate(case_control = case_when(encounter_type == "inpatient" ~ 1,
+                                                      encounter_type == "outpatient" ~ 0))
+
+# df.severity <- df %>% mutate(case_control = case_when(`Encounter.Type` %in% c("Inpatient", 
+#                                                                               "Newborn", 
+#                                                                               "Observation") & 
+#                                                         encounter_type != "inpatient_unrelated" ~ 1,
+#                                                       `Encounter.Type` %in% c("Emergency", "Hospital Outpatient Surgery", "Outpatient") ~ 0))
+
+ve.allhosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.allhosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against LRTI hospitalizations
+#######################
+df.severity <- df %>% mutate(case_control = case_when(symp_LRT_distress == 1 & encounter_type == "inpatient" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.LRThosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.LRThosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against rsv-related hospitalizations
+#######################
+df.severity <- df %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.RSVhosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.RSVhosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against severe hospitalizations
+#######################
+df.severity <- df %>% mutate(case_control = case_when(encounter_type == "inpatient" &
+                                                        (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
+                                                      TRUE ~ 0))
+
+ve.severehosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.severehosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+########################
+# against severe LRTI hospitalizations
+#######################
+df.severity <- df %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
+                                                      TRUE ~ 0))
+
+ve.severeLRThosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.severeLRThosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+
+########################
+# against RSV-related LRTI hospitalizations
+#######################
+df.severity <- df %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.rsvLRThosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.rsvLRThosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related hospitalizations
+###############################################
+df.severity <- df %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.severeRSVhosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.severeRSVhosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related LRTI hospitalizations
+###############################################
+df.severity <- df %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 &
+                                                        symp_LRT_distress == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.severeRSVLRThosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.severeRSVLRThosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against all-cause ICU admissions 
+###############################################
+df.severity <- df %>% mutate(case_control = case_when(icu_admitted == "yes" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.allICU.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.allICU.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against RSV-related ICU admissions 
+###############################################
+df.severity <- df %>% mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.rsvICU.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.rsvICU.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+# combine the tables together 
+rbind(
+  ve.infection.unadj, 
+  ve.allhosp.unadj,
+  ve.LRThosp.unadj,
+  ve.RSVhosp.unadj,
+  ve.severehosp.unadj,
+  ve.severeLRThosp.unadj,
+  ve.rsvLRThosp.unadj,
+  ve.severeRSVhosp.unadj,
+  ve.severeRSVLRThosp.unadj
+) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>% 
+  cbind(
+    rbind(
+      ve.infection.adj, 
+      ve.allhosp.adj,
+      ve.LRThosp.adj,
+      ve.RSVhosp.adj,
+      ve.severehosp.adj,
+      ve.severeLRThosp.adj,
+      ve.rsvLRThosp.adj,
+      ve.severeRSVhosp.adj,
+      ve.severeRSVLRThosp.adj
+    ) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select( n_overall, n_cases, n_controls, VE.adjusted) 
+  ) %>% 
+  mutate(`Protection against` = c("RSV infection",
+                                  "all-cause hospitalizations",
+                                  "LRT hospitalizations",
+                                  "RSV-related hospitalizations",
+                                  "severe hospitalizations",
+                                  "severe LRT hospitalizations",
+                                  "RSV-related LRT hospitalizations",
+                                  "severe RSV-related hospitalizations",
+                                  "severe RSV-related LRT hospitalizations")) %>%
+  arrange(desc(VE.adjusted)) %>%
+  dplyr::select(`Protection against`, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+```
+
+<br>
+
+
+#### Table `r tab.counter`. VE by outcome (severity) (RSV- as controls)
+  * Only doing unstratified for now.
+  * severe cases includes those admitted to ICU and those ordered highflow oxygen.
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+#######################
+# against RSV infection
+#######################
+df.severity <- df %>% mutate(case_control = positive_rsv)
+
+ve.infection.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.infection.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+########################
+# against rsv-related hospitalizations
+#######################
+df.severity <- df %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.RSVhosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.RSVhosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+
+########################
+# against RSV-related LRTI hospitalizations
+#######################
+df.severity <- df %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.rsvLRThosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.rsvLRThosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related hospitalizations
+###############################################
+df.severity <- df %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.severeRSVhosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.severeRSVhosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related LRTI hospitalizations
+###############################################
+df.severity <- df %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 &
+                                                        symp_LRT_distress == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.severeRSVLRThosp.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.severeRSVLRThosp.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against RSV-related ICU admissions 
+###############################################
+df.severity <- df %>% mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.rsvICU.unadj <- regress_unmatch(df.ve = df.severity,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.rsvICU.adj <- regress_unmatch(df.ve = df.severity,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+# combine the tables together 
+rbind(
+  ve.infection.unadj, 
+  ve.RSVhosp.unadj,
+  ve.rsvLRThosp.unadj,
+  ve.severeRSVhosp.unadj,
+  ve.severeRSVLRThosp.unadj
+) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>% 
+  cbind(
+    rbind(
+      ve.infection.adj, 
+      ve.RSVhosp.adj,
+      ve.rsvLRThosp.adj,
+      ve.severeRSVhosp.adj,
+      ve.severeRSVLRThosp.adj
+    ) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select( n_overall, n_cases, n_controls, VE.adjusted) 
+  ) %>% 
+  mutate(`Protection against` = c("RSV infection",
+                                  "RSV-related hospitalizations",
+                                  "RSV-related LRT hospitalizations",
+                                  "severe RSV-related hospitalizations",
+                                  "severe RSV-related LRT hospitalizations")) %>%
+  arrange(desc(VE.adjusted)) %>%
+  dplyr::select(`Protection against`, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+```
+
+<br>
+
+#### Table `r tab.counter`. VE over time (2 months break)
+  * Against RSV infection
+```{r warning = F}
+tab.counter <- tab.counter + 1
+
+# classify time since mab to testing 
+df <- df %>% 
+  mutate(days_btw_mab_collection_cat = 
+           case_when(days_btw_mab_collection < 0 & days_btw_mab_collection > -60 ~ "0-2 months", 
+                     days_btw_mab_collection <= -60 & days_btw_mab_collection > -120 ~ "2-4 months",
+                     days_btw_mab_collection <= -120 ~ "4 months +",
+                     is.na(days_btw_mab_collection) | days_btw_mab_collection >= 0 ~ "no mAb"))
+
+# define case control
+df.wane <- df %>% mutate(case_control = positive_rsv) %>%
+  mutate(days_btw_mab_collection_cat = factor(days_btw_mab_collection_cat,
+                                              levels = c("no mAb",
+                                                         "0-2 months",
+                                                         "2-4 months",
+                                                         "4 months +")))
+
+# unadjusted 
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat, data = df.wane, family = "binomial")
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:4])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:4])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
+                             paste(confounders, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:4])
+
+n.cases.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall.eff <- n.cases.eff + n.controls.eff
+
+n.cases <-  df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls <-  df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall <- n.cases + n.controls 
+
+data.frame(
+  strata = c("immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  n.overall = paste0(n.overall[,2], " (", n.overall.eff[,2], ")")[2:4],
+  n.cases = paste0(n.cases[,2], " (", n.cases.eff[,2], ")")[2:4],
+  n.controls = paste0(n.controls[,2], " (", n.controls.eff[,2], ")")[2:4],
+  VE.unadjusted = paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")"),
+  VE.adjusted = paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")
+) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+```
+<br>
+
+#### Table `r tab.counter`. VE over time (1 month break)
+  * Against RSV infection
+```{r warning = F}
+tab.counter <- tab.counter + 1
+
+# classify time since mab to testing 
+df <- df %>% 
+  mutate(days_btw_mab_collection_cat_2 = 
+           case_when(days_btw_mab_collection < 0 & days_btw_mab_collection > -30 ~ "0-1 months", 
+                     days_btw_mab_collection <= -30 & days_btw_mab_collection > -60 ~ "1-2 months",
+                     days_btw_mab_collection <= -60 & days_btw_mab_collection > -90 ~ "2-3 months",
+                     days_btw_mab_collection <= -90 & days_btw_mab_collection > -120 ~ "3-4 months",
+                     days_btw_mab_collection <= -120 ~ "4 months +",
+                     is.na(days_btw_mab_collection) | days_btw_mab_collection >= 0 ~ "no mAb"))
+
+# define case control
+df.wane <- df %>% mutate(case_control = positive_rsv) %>%
+  mutate(days_btw_mab_collection_cat_2 = factor(days_btw_mab_collection_cat_2,
+                                              levels = c("no mAb",
+                                                         "0-1 months",
+                                                         "1-2 months",
+                                                         "2-3 months",
+                                                         "3-4 months",
+                                                         "4 months +")))
+
+# unadjusted 
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_2, data = df.wane, family = "binomial")
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:6])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:6])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:6])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_2 + ", 
+                             paste(confounders, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:6])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:6])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:6])
+
+n.cases.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
+
+n.controls.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
+
+n.overall.eff <- n.cases.eff + n.controls.eff
+
+n.cases <-  df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
+
+n.controls <-  df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
+
+n.overall <- n.cases + n.controls 
+
+data.frame(
+  strata = c("immunized 0-1 months ago", "immuniaed 1-2 months ago", "immuniaed 2-3 months ago",
+             "immuniaed 3-4 months ago", "immunized 4 months + ago"),
+  n.overall = paste0(n.overall[,2], " (", n.overall.eff[,2], ")")[2:6],
+  n.cases = paste0(n.cases[,2], " (", n.cases.eff[,2], ")")[2:6],
+  n.controls = paste0(n.controls[,2], " (", n.controls.eff[,2], ")")[2:6],
+  VE.unadjusted = paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")"),
+  VE.adjusted = paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")
+) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+```
+
+#### Table `r tab.counter`. VE over time (2 months break) (RSV- | not hospitalized as controls)
+  * Against RSV-related hospitalizations
+```{r warning=FALSE}
+tab.counter <- tab.counter + 1
+
+# define case control
+df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                  TRUE ~ 0)) %>%
+  mutate(days_btw_mab_collection_cat = factor(days_btw_mab_collection_cat,
+                                              levels = c("no mAb",
+                                                         "0-2 months",
+                                                         "2-4 months",
+                                                         "4 months +")))
+
+# unadjusted 
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat, data = df.wane, family = "binomial")
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:4])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:4])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
+                             paste(confounders, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:4])
+
+n.cases.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall.eff <- n.cases.eff + n.controls.eff
+
+n.cases <-  df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls <-  df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall <- n.cases + n.controls 
+
+data.frame(
+  strata = c("immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  n.overall = paste0(n.overall[,2], " (", n.overall.eff[,2], ")")[2:4],
+  n.cases = paste0(n.cases[,2], " (", n.cases.eff[,2], ")")[2:4],
+  n.controls = paste0(n.controls[,2], " (", n.controls.eff[,2], ")")[2:4],
+  VE.unadjusted = paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")"),
+  VE.adjusted = paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")
+) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+```
+
+
+#### Table `r tab.counter`. VE over time (2 months break) (RSV- as controls)
+  * Against RSV-related hospitalizations
+```{r warning=FALSE}
+tab.counter <- tab.counter + 1
+
+# define case control
+df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                  positive_rsv == 0 ~ 0)) %>%
+  mutate(days_btw_mab_collection_cat = factor(days_btw_mab_collection_cat,
+                                              levels = c("no mAb",
+                                                         "0-2 months",
+                                                         "2-4 months",
+                                                         "4 months +")))
+
+# unadjusted 
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat, data = df.wane, family = "binomial")
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:4])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:4])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
+                             paste(confounders, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:4])
+
+n.cases.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls.eff <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall.eff <- n.cases.eff + n.controls.eff
+
+n.cases <-  df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls <-  df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall <- n.cases + n.controls 
+
+data.frame(
+  strata = c("immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  n.overall = paste0(n.overall[,2], " (", n.overall.eff[,2], ")")[2:4],
+  n.cases = paste0(n.cases[,2], " (", n.cases.eff[,2], ")")[2:4],
+  n.controls = paste0(n.controls[,2], " (", n.controls.eff[,2], ")")[2:4],
+  VE.unadjusted = paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")"),
+  VE.adjusted = paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")
+) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+```
+
+<br>
+
+
+
+
+### How dosage of mAb influence the effect {.tabset}
+
+#### Table `r tab.counter` First, compare those who took 50mg and those who took 100mg
+```{r}
+tab.counter <- tab.counter + 1
+
+df <- df %>%
+  mutate(rsv_mab_dose = case_when(rsv_mab_detailed == "100mg before collection" ~ "100mg",
+                                  rsv_mab_detailed == "50mg before collection" ~ "50mg",
+                                  TRUE ~ "no mAb"))
+
+df.dose <- df %>%
+  dplyr::select(rsv_mab_dose ,Sex, age_at_test_in_months, race_ethnicity, encounter_type, risk_factor_gestage, birth_weight, insurance_type, risk_factor_atleastone, icu_admitted) %>% 
+  # count "unrelated" hosp and ICU admissions as "no"
+  mutate(encounter_type = ifelse(encounter_type == "inpatient_unrelated", "outpatient", encounter_type)) %>%
+  mutate(icu_admitted = ifelse(icu_admitted == "yes_unrelated", "no", icu_admitted))
+
+tab_dose <- df.dose %>% 
+  tbl_summary(by = "rsv_mab_dose",
+              
+              type = all_continuous() ~ "continuous2",       # indicate that you want to print multiple statistics 
+              statistic = list(all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),                 
+                          all_categorical() ~ "{n} ({p}%)"),
+              
+              digits = list(all_categorical() ~ c(0, 1),
+                            all_continuous() ~ 1),
+              
+              label  = list(  
+                Sex ~ "Sex", 
+                age_at_test_in_months ~ "Age at testing (months)",
+                race_ethnicity ~ "Race and ethnicity",
+                encounter_type ~ "Encounter type",
+                risk_factor_gestage ~ "Gestational age",
+                insurance_type ~ "Insurance type",
+                risk_factor_atleastone ~ "Having at least one risk factor",
+                birth_weight = "Birth weight",
+                icu_admitted ~ "ICU admission"
+                ),
+        missing_text = "Missing"
+        #,
+         #     percent = "row"
+        #      missing= "no"
+                      ) %>% 
+  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
+  add_overall(last = F) %>%
+  bold_labels()
+
+
+tab_dose %>% as_flex_table() %>% 
+  flextable::set_table_properties( width = 1, layout = "autofit") 
+```
+
+#### Table `r tab.counter` Only compare the 50mg and 100mg recepients 
+```{r}
+tab.counter <- tab.counter + 1
+
+df.dose <- df.dose %>% filter(rsv_mab_dose != "no mAb")
+
+tab_dose <- df.dose %>% 
+  tbl_summary(by = "rsv_mab_dose",
+              
+              type = all_continuous() ~ "continuous2",       # indicate that you want to print multiple statistics 
+              statistic = list(all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),                 
+                          all_categorical() ~ "{n} ({p}%)"),
+              
+              digits = list(all_categorical() ~ c(0, 1),
+                            all_continuous() ~ 1),
+              
+              label  = list(  
+                Sex ~ "Sex", 
+                age_at_test_in_months ~ "Age at testing (months)",
+                race_ethnicity ~ "Race and ethnicity",
+                encounter_type ~ "Encounter type",
+                risk_factor_gestage ~ "Gestational age",
+                insurance_type ~ "Insurance type",
+                risk_factor_atleastone ~ "Having at least one risk factor",
+                birth_weight ~ "Birth weight",
+                icu_admitted ~ "ICU admission"
+                ),
+        missing_text = "Missing"
+        #,
+         #     percent = "row"
+        #      missing= "no"
+                      ) %>% 
+  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
+  add_overall(last = F) %>%
+  bold_labels()
+
+
+tab_dose %>% as_flex_table() %>% 
+  flextable::set_table_properties( width = 1, layout = "autofit") 
+
+```
+
+<br>
+
+#### Table `r tab.counter` VE by dosage (100mg vs. unimmunized)
+  * Only doing unstratified for now.
+  * severe cases includes those admitted to ICU and those ordered highflow oxygen.
+```{r}
+tab.counter <- tab.counter + 1
+
+#######################
+# against RSV infection
+#######################
+df.dose.100mg <- df %>% mutate(case_control = positive_rsv) %>% 
+  mutate(rsv_mab = case_when(rsv_mab_dose == "100mg" ~ 1,
+                             rsv_mab == 0 ~ 0))
+  
+ve.100mg.infection.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.infection.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+####################################
+# against all-cause hospitalizations
+####################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(encounter_type == "inpatient" ~ 1,
+                                                                   encounter_type == "outpatient" ~ 0))
+
+# df.severity <- df %>% mutate(case_control = case_when(`Encounter.Type` %in% c("Inpatient", 
+#                                                                               "Newborn", 
+#                                                                               "Observation") & 
+#                                                         encounter_type != "inpatient_unrelated" ~ 1,
+#                                                       `Encounter.Type` %in% c("Emergency", "Hospital Outpatient Surgery", "Outpatient") ~ 0))
+
+ve.100mg.allhosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.allhosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against LRTI hospitalizations
+#######################
+df.dose.100mg <- df.dose.100mg %>% 
+  mutate(case_control = case_when(symp_LRT_distress == 1 & encounter_type == "inpatient" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.LRThosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.LRThosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against rsv-related hospitalizations
+#######################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.RSVhosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.RSVhosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against severe hospitalizations
+#######################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(encounter_type == "inpatient" &
+                                                        (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.severehosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.severehosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+########################
+# against severe LRTI hospitalizations
+#######################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.severeLRThosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.severeLRThosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+
+########################
+# against RSV-related LRTI hospitalizations
+#######################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.rsvLRThosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.rsvLRThosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related hospitalizations
+###############################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.severeRSVhosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.severeRSVhosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related LRTI hospitalizations
+###############################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 &
+                                                        symp_LRT_distress == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.severeRSVLRThosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.severeRSVLRThosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against all-cause ICU admissions 
+###############################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(icu_admitted == "yes" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.allICU.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.allICU.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against RSV-related ICU admissions 
+###############################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.100mg.rsvICU.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.rsvICU.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+# combine the tables together 
+ve.results.100mg <- 
+  rbind(
+  ve.100mg.infection.unadj, 
+  ve.100mg.allhosp.unadj,
+  ve.100mg.LRThosp.unadj,
+  ve.100mg.RSVhosp.unadj,
+  ve.100mg.severehosp.unadj,
+  ve.100mg.severeLRThosp.unadj,
+  ve.100mg.rsvLRThosp.unadj,
+  ve.100mg.severeRSVhosp.unadj,
+  ve.100mg.severeRSVLRThosp.unadj
+) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>% 
+  cbind(
+    rbind(
+      ve.100mg.infection.adj, 
+      ve.100mg.allhosp.adj,
+      ve.100mg.LRThosp.adj,
+      ve.100mg.RSVhosp.adj,
+      ve.100mg.severehosp.adj,
+      ve.100mg.severeLRThosp.adj,
+      ve.100mg.rsvLRThosp.adj,
+      ve.100mg.severeRSVhosp.adj,
+      ve.100mg.severeRSVLRThosp.adj
+    ) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select( n_overall, n_cases, n_controls, VE.adjusted) 
+  ) %>% 
+  mutate(`Protection against` = c("RSV infection",
+                                  "all-cause hospitalizations",
+                                  "LRT hospitalizations",
+                                  "RSV-related hospitalizations",
+                                  "severe hospitalizations",
+                                  "severe LRT hospitalizations",
+                                  "RSV-related LRT hospitalizations",
+                                  "severe RSV-related hospitalizations",
+                                  "severe RSV-related LRT hospitalizations")) %>%
+   mutate(`Protection against` = factor(`Protection against`,
+                                       levels = c("RSV infection",
+                                                  "RSV-related hospitalizations",
+                                                  "severe RSV-related hospitalizations",
+                                                  "RSV-related LRT hospitalizations",
+                                                  "severe RSV-related LRT hospitalizations",
+                                                  "all-cause hospitalizations",
+                                                  "LRT hospitalizations",
+                                                  "severe hospitalizations",
+                                                  "severe LRT hospitalizations")))
+
+ve.results.100mg %>%
+  arrange(`Protection against`) %>%
+  dplyr::select(`Protection against`, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+```
+
+
+#### Table `r tab.counter` VE by dosage (50mg vs. unimmunized)
+  * Only doing unstratified for now.
+  * severe cases includes those admitted to ICU and those ordered highflow oxygen.
+```{r}
+tab.counter <- tab.counter + 1
+
+#######################
+# against RSV infection
+#######################
+df.dose.50mg <- df %>% mutate(case_control = positive_rsv) %>% 
+  mutate(rsv_mab = case_when(rsv_mab_dose == "50mg" ~ 1,
+                             rsv_mab == 0 ~ 0))
+  
+ve.50mg.infection.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.infection.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+####################################
+# against all-cause hospitalizations
+####################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(encounter_type == "inpatient" ~ 1,
+                                                                   encounter_type == "outpatient" ~ 0))
+
+# df.severity <- df %>% mutate(case_control = case_when(`Encounter.Type` %in% c("Inpatient", 
+#                                                                               "Newborn", 
+#                                                                               "Observation") & 
+#                                                         encounter_type != "inpatient_unrelated" ~ 1,
+#                                                       `Encounter.Type` %in% c("Emergency", "Hospital Outpatient Surgery", "Outpatient") ~ 0))
+
+ve.50mg.allhosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.allhosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against LRTI hospitalizations
+#######################
+df.dose.50mg <- df.dose.50mg %>% 
+  mutate(case_control = case_when(symp_LRT_distress == 1 & encounter_type == "inpatient" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.LRThosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.LRThosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against rsv-related hospitalizations
+#######################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.RSVhosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.RSVhosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against severe hospitalizations
+#######################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(encounter_type == "inpatient" &
+                                                        (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.severehosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.severehosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+########################
+# against severe LRTI hospitalizations
+#######################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.severeLRThosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.severeLRThosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+
+########################
+# against RSV-related LRTI hospitalizations
+#######################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.rsvLRThosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.rsvLRThosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related hospitalizations
+###############################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.severeRSVhosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.severeRSVhosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related LRTI hospitalizations
+###############################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 &
+                                                        symp_LRT_distress == 1 ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.severeRSVLRThosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.severeRSVLRThosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against all-cause ICU admissions 
+###############################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(icu_admitted == "yes" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.allICU.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.allICU.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against RSV-related ICU admissions 
+###############################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
+                                                      TRUE ~ 0))
+
+ve.50mg.rsvICU.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.rsvICU.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+# combine the tables together 
+ve.results.50mg <- 
+  rbind(
+  ve.50mg.infection.unadj, 
+  ve.50mg.allhosp.unadj,
+  ve.50mg.LRThosp.unadj,
+  ve.50mg.RSVhosp.unadj,
+  ve.50mg.severehosp.unadj,
+  ve.50mg.severeLRThosp.unadj,
+  ve.50mg.rsvLRThosp.unadj,
+  ve.50mg.severeRSVhosp.unadj,
+  ve.50mg.severeRSVLRThosp.unadj
+) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>% 
+  cbind(
+    rbind(
+      ve.50mg.infection.adj, 
+      ve.50mg.allhosp.adj,
+      ve.50mg.LRThosp.adj,
+      ve.50mg.RSVhosp.adj,
+      ve.50mg.severehosp.adj,
+      ve.50mg.severeLRThosp.adj,
+      ve.50mg.rsvLRThosp.adj,
+      ve.50mg.severeRSVhosp.adj,
+      ve.50mg.severeRSVLRThosp.adj
+    ) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select( n_overall, n_cases, n_controls, VE.adjusted) 
+  ) %>% 
+  mutate(`Protection against` = c("RSV infection",
+                                  "all-cause hospitalizations",
+                                  "LRT hospitalizations",
+                                  "RSV-related hospitalizations",
+                                  "severe hospitalizations",
+                                  "severe LRT hospitalizations",
+                                  "RSV-related LRT hospitalizations",
+                                  "severe RSV-related hospitalizations",
+                                  "severe RSV-related LRT hospitalizations")) %>% 
+  mutate(`Protection against` = factor(`Protection against`,
+                                       levels = c("RSV infection",
+                                                  "RSV-related hospitalizations",
+                                                  "severe RSV-related hospitalizations",
+                                                  "RSV-related LRT hospitalizations",
+                                                  "severe RSV-related LRT hospitalizations",
+                                                  "all-cause hospitalizations",
+                                                  "LRT hospitalizations",
+                                                  "severe hospitalizations",
+                                                  "severe LRT hospitalizations")))
+
+ve.results.50mg %>%
+  arrange(`Protection against`) %>%
+  dplyr::select(`Protection against`, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+```
+
+
+#### Table `r tab.counter`. Compare VE from 50mg and 100mg dosage
+```{r}
+tab.counter <- tab.counter + 1
+
+ve.results.50mg %>% 
+  dplyr::select(`Protection against`, VE.unadjusted, VE.adjusted) %>%
+  rename(VE.unadjusted.50mg = VE.unadjusted, VE.adjusted.50mg = VE.adjusted) %>%
+  left_join(
+    ve.results.100mg %>% 
+  dplyr::select(`Protection against`, VE.unadjusted, VE.adjusted) %>%
+  rename(VE.unadjusted.100mg = VE.unadjusted, VE.adjusted.100mg = VE.adjusted)
+  ) %>% 
+  arrange(`Protection against`) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T)
+```
+
+
+
+#### Table `r tab.counter` VE by dosage (100mg vs. unimmunized) (RSV- as controls)
+  * Only doing unstratified for now.
+  * severe cases includes those admitted to ICU and those ordered highflow oxygen.
+```{r}
+tab.counter <- tab.counter + 1
+
+#######################
+# against RSV infection
+#######################
+df.dose.100mg <- df %>% mutate(case_control = positive_rsv) %>% 
+  mutate(rsv_mab = case_when(rsv_mab_dose == "100mg" ~ 1,
+                             rsv_mab == 0 ~ 0))
+  
+ve.100mg.infection.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.infection.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+########################
+# against rsv-related hospitalizations
+#######################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.100mg.RSVhosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.RSVhosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+
+########################
+# against RSV-related LRTI hospitalizations
+#######################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.100mg.rsvLRThosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.rsvLRThosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related hospitalizations
+###############################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.100mg.severeRSVhosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.severeRSVhosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related LRTI hospitalizations
+###############################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 &
+                                                        symp_LRT_distress == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.100mg.severeRSVLRThosp.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.severeRSVLRThosp.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against RSV-related ICU admissions 
+###############################################
+df.dose.100mg <- df.dose.100mg %>% mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.100mg.rsvICU.unadj <- regress_unmatch(df.ve = df.dose.100mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.100mg.rsvICU.adj <- regress_unmatch(df.ve = df.dose.100mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+# combine the tables together 
+ve.results.100mg <- 
+  rbind(
+  ve.100mg.infection.unadj, 
+  ve.100mg.RSVhosp.unadj,
+  ve.100mg.rsvLRThosp.unadj,
+  ve.100mg.severeRSVhosp.unadj,
+  ve.100mg.severeRSVLRThosp.unadj
+) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>% 
+  cbind(
+    rbind(
+      ve.100mg.infection.adj, 
+      ve.100mg.RSVhosp.adj,
+      ve.100mg.rsvLRThosp.adj,
+      ve.100mg.severeRSVhosp.adj,
+      ve.100mg.severeRSVLRThosp.adj
+    ) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select( n_overall, n_cases, n_controls, VE.adjusted) 
+  ) %>% 
+  mutate(`Protection against` = c("RSV infection",
+                                  "RSV-related hospitalizations",
+                                  "RSV-related LRT hospitalizations",
+                                  "severe RSV-related hospitalizations",
+                                  "severe RSV-related LRT hospitalizations")) %>%
+   mutate(`Protection against` = factor(`Protection against`,
+                                       levels = c("RSV infection",
+                                                  "RSV-related hospitalizations",
+                                                  "severe RSV-related hospitalizations",
+                                                  "RSV-related LRT hospitalizations",
+                                                  "severe RSV-related LRT hospitalizations"
+                                                  )))
+
+ve.results.100mg %>%
+  arrange(`Protection against`) %>%
+  dplyr::select(`Protection against`, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+```
+
+
+#### Table `r tab.counter` VE by dosage (50mg vs. unimmunized) (RSV- as controls)
+  * Only doing unstratified for now.
+  * severe cases includes those admitted to ICU and those ordered highflow oxygen.
+```{r}
+tab.counter <- tab.counter + 1
+
+#######################
+# against RSV infection
+#######################
+df.dose.50mg <- df %>% mutate(case_control = positive_rsv) %>% 
+  mutate(rsv_mab = case_when(rsv_mab_dose == "50mg" ~ 1,
+                             rsv_mab == 0 ~ 0))
+  
+ve.50mg.infection.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.infection.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+########################
+# against rsv-related hospitalizations
+#######################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.50mg.RSVhosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.RSVhosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+########################
+# against RSV-related LRTI hospitalizations
+#######################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(symp_LRT_distress == 1 & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.50mg.rsvLRThosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.rsvLRThosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related hospitalizations
+###############################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.50mg.severeRSVhosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.severeRSVhosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+################################################
+# against severe RSV-related LRTI hospitalizations
+###############################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when((icu_admitted == "yes" | highflow_oxygen == 1) & 
+                                                        encounter_type == "inpatient" & 
+                                                        positive_rsv == 1 &
+                                                        symp_LRT_distress == 1 ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.50mg.severeRSVLRThosp.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.severeRSVLRThosp.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+################################################
+# against RSV-related ICU admissions 
+###############################################
+df.dose.50mg <- df.dose.50mg %>% mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
+                                                      positive_rsv == 0 ~ 0))
+
+ve.50mg.rsvICU.unadj <- regress_unmatch(df.ve = df.dose.50mg,
+                                      adjusted = "no") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+ve.50mg.rsvICU.adj <- regress_unmatch(df.ve = df.dose.50mg,
+                                    adjusted = "yes") %>%
+  mutate(stratify_by = "unstratified", strata = NA)
+
+
+# combine the tables together 
+ve.results.50mg <- 
+  rbind(
+  ve.50mg.infection.unadj, 
+  ve.50mg.RSVhosp.unadj,
+  ve.50mg.rsvLRThosp.unadj,
+  ve.50mg.severeRSVhosp.unadj,
+  ve.50mg.severeRSVLRThosp.unadj
+) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.unadjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  dplyr::select(VE.unadjusted) %>% 
+  cbind(
+    rbind(
+      ve.50mg.infection.adj, 
+      ve.50mg.RSVhosp.adj,
+      ve.50mg.rsvLRThosp.adj,
+      ve.50mg.severeRSVhosp.adj,
+      ve.50mg.severeRSVLRThosp.adj
+    ) %>% 
+  mutate(across(starts_with("ve"), ~ round(. * 100, 1))) %>%
+  mutate(VE.adjusted = paste0(ve_median, " (", ve_lb, "-", ve_ub, ")")) %>%
+  mutate(n_overall = paste0(n_overall, " (", n_overall_eff, ")"),
+         n_cases = paste0(n_cases, " (", n_cases_eff, ")"),
+         n_controls = paste0(n_controls, " (", n_controls_eff, ")")) %>%
+  dplyr::select( n_overall, n_cases, n_controls, VE.adjusted) 
+  ) %>% 
+  mutate(`Protection against` = c("RSV infection",
+                                  "RSV-related hospitalizations",
+                                  "RSV-related LRT hospitalizations",
+                                  "severe RSV-related hospitalizations",
+                                  "severe RSV-related LRT hospitalizations")) %>% 
+  mutate(`Protection against` = factor(`Protection against`,
+                                       levels = c("RSV infection",
+                                                  "RSV-related hospitalizations",
+                                                  "severe RSV-related hospitalizations",
+                                                  "RSV-related LRT hospitalizations",
+                                                  "severe RSV-related LRT hospitalizations"
+                                                  )))
+
+ve.results.50mg %>%
+  arrange(`Protection against`) %>%
+  dplyr::select(`Protection against`, n_overall, n_cases, n_controls, VE.unadjusted, VE.adjusted) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+```
+
+#### Table `r tab.counter`. Compare VE from 50mg and 100mg dosage (RSV- as controls)
+```{r}
+tab.counter <- tab.counter + 1
+
+ve.results.50mg %>% 
+  dplyr::select(`Protection against`, VE.unadjusted, VE.adjusted) %>%
+  rename(VE.unadjusted.50mg = VE.unadjusted, VE.adjusted.50mg = VE.adjusted) %>%
+  left_join(
+    ve.results.100mg %>% 
+  dplyr::select(`Protection against`, VE.unadjusted, VE.adjusted) %>%
+  rename(VE.unadjusted.100mg = VE.unadjusted, VE.adjusted.100mg = VE.adjusted)
+  ) %>% 
+  arrange(`Protection against`) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T)
+```
+
+
+#### Table `r tab.counter`. How VE from different dosage varies over time (100mg)
+  * Against RSV infection
+  * there is no 100mg taken more than 2 months ago.
+```{r warning=FALSE}
+tab.counter <- tab.counter + 1
+
+# define case control
+df.dose.wane.100mg <- df %>% mutate(case_control = positive_rsv) %>%
+  mutate(rsv_mab = case_when(rsv_mab_dose == "100mg" ~ 1,
+                             rsv_mab == 0 ~ 0)) %>% 
+  filter(!is.na(rsv_mab)) %>%
+  mutate(days_btw_mab_collection_cat = factor(days_btw_mab_collection_cat,
+                                              levels = c("no mAb",
+                                                         "0-2 months",
+                                                         "2-4 months",
+                                                         "4 months +"))) %>%
+  filter(days_btw_mab_collection_cat %in% c("no mAb", "0-2 months"))
+
+# unadjusted 
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat, data = df.dose.wane.100mg, family = "binomial")
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
+                             paste(confounders, collapse = " + ")))
+model.adj <- glm(formula, data = df.dose.wane.100mg, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2])
+
+n.cases.eff <- df.dose.wane.100mg[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls.eff <- df.dose.wane.100mg[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall.eff <- n.cases.eff + n.controls.eff
+
+n.cases <-  df.dose.wane.100mg[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls <-  df.dose.wane.100mg[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall <- n.cases + n.controls 
+
+
+
+
+ve.results.100mg.wane <- 
+  data.frame(
+  strata = c("immunized 0-2 months ago"),
+  n.overall = paste0(n.overall[,2], " (", n.overall.eff[,2], ")")[2],
+  n.cases = paste0(n.cases[,2], " (", n.cases.eff[,2], ")")[2],
+  n.controls = paste0(n.controls[,2], " (", n.controls.eff[,2], ")")[2],
+  VE.unadjusted = paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")"),
+  VE.adjusted = paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")
+) 
+
+ve.results.100mg.wane %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+
+```
+
+
+#### Table `r tab.counter`. How VE from different dosage varies over time (50mg)
+  * Against RSV infection
+```{r warning=FALSE}
+tab.counter <- tab.counter + 1
+
+# define case control
+df.dose.wane.50mg <- df %>% mutate(case_control = positive_rsv) %>%
+  mutate(rsv_mab = case_when(rsv_mab_dose == "50mg" ~ 1,
+                             rsv_mab == 0 ~ 0)) %>% 
+    filter(!is.na(rsv_mab)) %>%
+  mutate(days_btw_mab_collection_cat = factor(days_btw_mab_collection_cat,
+                                              levels = c("no mAb",
+                                                         "0-2 months",
+                                                         "2-4 months",
+                                                         "4 months +")))
+
+# unadjusted 
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat, data = df.dose.wane.50mg, family = "binomial")
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:4])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:4])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
+                             paste(confounders, collapse = " + ")))
+model.adj <- glm(formula, data = df.dose.wane.50mg, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:4])
+
+n.cases.eff <- df.dose.wane.50mg[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls.eff <- df.dose.wane.50mg[, c("case_control", "days_btw_mab_collection_cat", confounders)] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall.eff <- n.cases.eff + n.controls.eff
+
+n.cases <-  df.dose.wane.50mg[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+
+n.controls <-  df.dose.wane.50mg[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  filter(across(everything(), ~ !is.na(.))) %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.overall <- n.cases + n.controls 
+
+ve.results.50mg.wane <- 
+  data.frame(
+  strata = c("immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  n.overall = paste0(n.overall[,2], " (", n.overall.eff[,2], ")")[2:4],
+  n.cases = paste0(n.cases[,2], " (", n.cases.eff[,2], ")")[2:4],
+  n.controls = paste0(n.controls[,2], " (", n.controls.eff[,2], ")")[2:4],
+  VE.unadjusted = paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")"),
+  VE.adjusted = paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")
+)
+
+ve.results.50mg.wane %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+
+```
+
+#### Table `r tab.counter`. Compare VE by dosage over time 
+```{r}
+tab.counter <- tab.counter + 1
+
+ve.results.50mg.wane %>% 
+  dplyr::select(strata, VE.unadjusted, VE.adjusted) %>%
+  rename(VE.adjusted.50mg = VE.adjusted, VE.unadjusted.50mg = VE.unadjusted) %>%
+  left_join(
+    ve.results.100mg.wane %>%
+      dplyr::select(strata, VE.unadjusted, VE.adjusted) %>%
+  rename(VE.adjusted.100mg = VE.adjusted, VE.unadjusted.100mg = VE.unadjusted)
+  ) %>%
+   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+
+```
+
+
+
+<br>
+
+### Effectiveness of Nirsevimab **(matched)**
+
+#### Match each case (RSV positive) with controls (RSV negative). Match by:
+  * tested date: within 14 days before of after (TBC: whether need to add this as confounder to unmatched analysis, maybe add as month tested?)
+  * age when tested (months): exact the same month of age.
+  * sex
+  * race and ethnicity
+  
+#### Here match case with all eligible controls. 
+```{r}
+df.matched <- df %>% mutate(case_control = positive_rsv) %>% 
+  mutate(collection_date = as.Date(collection_date))
+
+
+df.cases <- df.matched %>% filter(case_control == 1)
+df.cases$id_case <- 1:nrow(df.cases)
+df.controls <- df.matched %>% filter(case_control == 0)
+
+n.cases <- nrow(df.cases)
+
+
+for(i in 1:n.cases){
+  
+  df.temp <- df.cases[i,]
+  
+  # this case's traits
+  case.test.date <- df.temp$collection_date
+  case.age <- floor(df.temp$age_at_test_in_months)
+  case.sex <- df.temp$Sex
+  case.race <- df.temp$race_ethnicity
+  case.insurance <- df.temp$insurance_type
+  case.gestage <- df.temp$risk_factor_gestage
+  
+  df.matched.controls <- df.controls %>%
+    filter(collection_date >= case.test.date - 14 & collection_date <= case.test.date + 14) %>%
+    filter(floor(age_at_test_in_months) ==  case.age) %>%
+    filter(Sex == case.sex) %>%
+    filter(race_ethnicity == case.race)
+    # filter(insurance_type == case.insurance) %>% 
+    # filter(risk_factor_gestage == case.gestage) 
+  
+  if(nrow(df.matched.controls != 0)){
+    df.matched.controls <- df.matched.controls %>% mutate(id_case = i)
+    df.case.control.temp <- rbind(df.temp, 
+                                  df.matched.controls) 
+    if(i == 1){df.case.control <- df.case.control.temp}
+    if(i != 1){df.case.control <- rbind(df.case.control, df.case.control.temp)}
+  }
+  
+}
+
+
+# there are some cases without matched controls (n=72)
+n.unmatched <- nrow(df.cases) - length(unique(df.case.control$id_case)) 
+id.unmatched <- c(1:nrow(df.cases))[c(1:nrow(df.cases)) %in% unique(df.case.control$id_case) == F]
+
+# average number of control matched (n ~ 5)
+n.mean.controls <- mean((df.case.control %>% filter(case_control == 0) %>% group_by(id_case) %>% count() )$n)
+
+```
+
+
+### Table `r tab.counter`. Take a look at matched cases and controls 
+```{r}
+tab.counter <- tab.counter + 1
+
+df.case.control %>% 
+  count(case_control) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+
+```
+
+<br>
+
+### Table `r tab.counter`. Compare matched cases and unmatched cases 
+```{r}
+tab.counter <- tab.counter + 1
+
+df.cases <- df.cases %>%
+  mutate(matched = ifelse(id_case %in% id.unmatched, "unmatched", "matched"))
+
+df_compare <- df.cases %>%
+  mutate(rsv_mab = ifelse(rsv_mab == 1, "yes", "no")) %>%
+  dplyr::select(positive_rsv,Sex, age_at_test_in_months, race_ethnicity, encounter_type, risk_factor_gestage, birth_weight, insurance_type, rsv_mab, risk_factor_atleastone, icu_admitted, matched) %>% 
+  mutate(positive_rsv = case_when(positive_rsv == 1 ~ "Cases (RSV+)",
+                                  positive_rsv == 0 ~ "Controls (RSV-)")) %>%
+  # count "unrelated" hosp and ICU admissions as "no"
+  mutate(encounter_type = ifelse(encounter_type == "inpatient_unrelated", "outpatient", encounter_type)) %>%
+  mutate(icu_admitted = ifelse(icu_admitted == "yes_unrelated", "no", icu_admitted))
+
+tab_compare <- df_compare %>% 
+  tbl_summary(by = "matched",
+              
+              type = all_continuous() ~ "continuous2",       # indicate that you want to print multiple statistics 
+              statistic = list(all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),                 
+                          all_categorical() ~ "{n} ({p}%)"),
+              
+              digits = list(all_categorical() ~ c(0, 1),
+                            all_continuous() ~ 1),
+              
+              label  = list(  
+                Sex ~ "Sex", 
+                age_at_test_in_months ~ "Age at testing (months)",
+                race_ethnicity ~ "Race and ethnicity",
+                encounter_type ~ "Encounter type",
+                risk_factor_gestage ~ "Gestational age",
+                birth_weight ~ "Birth weight",
+                insurance_type ~ "Insurance type",
+                rsv_mab ~ "mAb status",
+                risk_factor_atleastone ~ "Having at least one risk factor",
+                icu_admitted ~ "ICU admission"
+                ),
+        missing_text = "Missing"
+        #,
+         #     percent = "row"
+        #      missing= "no"
+                      ) %>% 
+  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
+  add_overall(last = F) %>%
+  bold_labels()
+
+
+tab_compare %>% as_flex_table() %>% 
+  flextable::set_table_properties( width = 1, layout = "autofit") 
+
+```
+
+
+#### After matching, there are still `r n.unmatched` cases with no matched controls (excluded these from matched cc analysis), the mean number of controls matched to a case is 5.
+
+```{r}
+confounders_matched <- c("risk_factor_gestage",
+                         "insurance_type",
+                         "risk_factor_atleastone",
+                         "birth_weight")
+
+```
+
+<br>
+
+
+### Matched case-control to get VE {.tabset}
+(case: RSV+; control: RSV-)
+
+#### Table `r tab.counter` RSV+ vs. RSV-
+```{r}
+tab.counter <- tab.counter + 1
+
+df.matched <- df.case.control 
+
+##############
+# unstratified
+##############
+
+# unadjusted
+formula <- as.formula("case_control ~ rsv_mab + strata(id_case)")
+
+model <- clogit(formula, data = df.matched)
+
+ve.median.unadj <- 1- exp(model$coefficients)
+ve.ub.unadj <- 1- exp(confint(model)[1])
+ve.lb.unadj <- 1- exp(confint(model)[2])
+
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ rsv_mab + ",
+                             paste(confounders_matched, collapse = " + "),
+                             " + strata(id_case)"))
+
+model <- clogit(formula, data = df.matched)
+
+ve.median.adj <- 1- exp(model$coefficients[1])
+ve.ub.adj <- 1- exp(confint(model)[,1][1])
+ve.lb.adj <- 1- exp(confint(model)[,2][1])
+
+# get the number of cases and controls 
+n.cases <- df.matched %>% filter(case_control == 1) %>% nrow()
+n.controls <- df.matched %>% filter(case_control == 0) %>% nrow()
+n.overall <- n.cases + n.controls 
+
+n.cases.eff <- df.matched[, c("case_control", confounders)] %>% filter(case_control == 1) %>%
+  filter(across(confounders, ~ !is.na(.))) %>% nrow()
+n.controls.eff <- df.matched[, c("case_control", confounders)] %>% filter(case_control == 0) %>%
+  filter(across(confounders, ~ !is.na(.))) %>% nrow()
+n.overall.eff <- n.cases.eff + n.controls.eff
+
+# combine into one table 
+data.frame(
+  n.overall = paste0(n.overall, " (", n.overall.eff, ")"),
+  n.cases = paste0(n.cases, " (", n.cases.eff, ")"),
+  n.controls = paste0(n.controls, " (", n.controls.eff, ")"),
+  VE.unadj = paste0(round(ve.median.unadj*100,1), " (", 
+                    round(ve.lb.unadj*100,1), "-", 
+                    round(ve.ub.unadj*100,1), ")"),
+  VE.adj = paste0(round(ve.median.adj*100,1), " (", 
+                    round(ve.lb.adj*100,1), "-", 
+                    round(ve.ub.adj*100,1), ")")
+) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+
+```
+
+
+
+
+
+
+
+
+
+
+

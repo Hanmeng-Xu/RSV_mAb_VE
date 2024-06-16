@@ -1,0 +1,677 @@
+---
+title: "VE of Nirsevimab (jags model w/ commensurate priors)"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+### Date: `r Sys.Date()`
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(readxl)
+library(writexl)
+library(reactable)
+library(ggplot2)
+library(stringr)
+library(flextable)
+library(lubridate)
+library(rjags)
+
+
+library(gtsummary) # for table 1
+library(multcomp)
+library(survival) # for matched case-control
+
+fig.counter <- 1
+tab.counter <- 1
+
+source("utils_mAb_VE.R")
+source("jags_commensurate_prior.R")
+
+
+rerun <- FALSE
+```
+
+### Take a look at data extracted from previous trials and longitudinal studies 
+  * Hammitt et al.2022: MELODY (Phase III)
+  * Simões et al. 2023: phase IIb + phase III
+  * Ares-Gómez et al. 2024: longitudinal study in Spain
+```{r}
+# read in data from MELODY trial (Hammitt et al. 2022)
+df.orig.trial <- read_excel("../data/jags/ve_trials.xlsx", sheet = "trial") %>% dplyr::select(-title)
+
+df.orig.trial %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T, groupBy = "Trial") 
+
+# make columns for jags output
+df.orig.trial$ve_uninfo_median <- NA
+df.orig.trial$ve_uninfo_lb <- NA
+df.orig.trial$ve_uninfo_ub <- NA
+df.orig.trial$ve_info_median <- NA
+df.orig.trial$ve_info_lb <- NA
+df.orig.trial$ve_info_ub <- NA
+```
+
+
+
+```{r}
+# read in dataset for the current case-control study for Nirsevimab
+df <- read.csv("../data/clean_data/df.mab.csv")
+
+# add some variables 
+df <- process_df(df.cc = df)
+```
+
+```{r}
+confounders_severity_2 <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat"
+)
+
+# convert confounders from character to numeric 
+df <- df %>% 
+  mutate(cf_age = case_when(age_at_test_in_months_cat_2 == "under 3m" ~ 1,
+                            age_at_test_in_months_cat_2 == "3-6m" ~ 2,
+                            age_at_test_in_months_cat_2 == "6-9m" ~ 3,
+                            age_at_test_in_months_cat_2 == "9-12m" ~ 4,
+                            age_at_test_in_months_cat_2 == "above 1 yo" ~ 5)) %>%
+  mutate(cf_month_tested = case_when(month_when_tested_cat == "Oct-Nov" ~ 1,
+                                     month_when_tested_cat == "Dec-Jan" ~ 2,
+                                     month_when_tested_cat == "Feb-Mar" ~ 3,
+                                     month_when_tested_cat == "April and after" ~ 4
+                                     ))
+```
+
+<br>
+
+### Use data from previous trials as priors to do VE estimation {.tabset}
+
+Comparing:   
+  * Original trial estimates;
+  * Adjusted VE estimated from current case-control study (uninformative priors);
+  * Adjusted VE estimated from current case-control study (trial data as informative priors)
+
+#### Medically attended RSV LRTI (Hammitt et al)
+  * extracted from case-control: RSV-related LRTI as cases vs. RSV- as controls
+```{r}
+####################################################
+# Medically attended RSV LRTI as endpoint (Hammitt et al) 
+####################################################
+df.jags <- df %>% 
+  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
+                                  positive_rsv == 0 ~ 0)) %>%
+  filter(!is.na(case_control))
+
+
+dataset_uninformative_priors <- 
+            list(
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested # month when tested
+                )
+
+dataset_informative_priors <- 
+            list(
+                # from previous study
+                N_cases_orig = c(25, 12), # (case_placebo, case_vax)
+                pop_orig = c(496, 994), # (N_placebo, N_vax)
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested, # month when tested
+                # others
+                prior_mean_log_irr = 999, 
+                set_tau_shp=999, 
+                set_tau_rate=999, 
+                prior_prec_log_irr = 999, 
+                sd.upper=999
+                )
+
+
+source("jags_commensurate_prior.R")
+
+if(rerun){
+  # model w/ uninformative priors 
+  jags.post.uninfo <- jags.model(textConnection(model_string_uninformative_priors), 
+                          data = dataset_uninformative_priors,
+                          n.chains = 3)
+
+  samples.uninfo <- coda.samples(jags.post.uninfo, 
+                          variable.names=c("int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.uninfo, "../data/jags/post/RSV_LRTI_uninfo.rds")
+  
+   # model w/ informative priors 
+  jags.post.info <- jags.model(textConnection(model_string_informative_priors), 
+                          data = dataset_informative_priors,
+                          n.chains = 3)
+
+  samples.info <- coda.samples(jags.post.info, 
+                          variable.names=c("delta", "int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.info, "../data/jags/post/RSV_LRTI_info.rds")
+  
+}else{
+  samples.uninfo <- readRDS("../data/jags/post/RSV_LRTI_uninfo.rds")
+  samples.info <- readRDS("../data/jags/post/RSV_LRTI_info.rds")
+}
+
+
+## process jags output 
+
+# uninformative priors 
+post1 <- as.data.frame(as.matrix(samples.uninfo[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.uninfo[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.uninfo[[3]][-c(1:4500),])) 
+post.uninfo <- bind_rows(post1, post2, post3)
+
+ve.median.uninfo <- round((1 - exp(median(post.uninfo$beta1)))*100,1)
+ve.lb.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.975))) *100,1)
+ve.ub.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.025)))*100, 1)
+
+# informative priors 
+post1 <- as.data.frame(as.matrix(samples.info[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.info[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.info[[3]][-c(1:4500),])) 
+post.info <- bind_rows(post1, post2, post3)
+
+ve.median.info <- round((1 - exp(median(post.info$beta1)))*100,1)
+ve.lb.info <- round((1 - exp(quantile(post.info$beta1, 0.975))) *100,1)
+ve.ub.info <- round((1 - exp(quantile(post.info$beta1, 0.025)))*100, 1)
+
+# fill in results
+row_index <- 1
+df.orig.trial$ve_uninfo_median[row_index] <- ve.median.uninfo
+df.orig.trial$ve_uninfo_lb[row_index] <- ve.lb.uninfo
+df.orig.trial$ve_uninfo_ub[row_index] <- ve.ub.uninfo
+df.orig.trial$ve_info_median[row_index] <- ve.median.info
+df.orig.trial$ve_info_lb[row_index] <- ve.lb.info
+df.orig.trial$ve_info_ub[row_index] <- ve.ub.info
+
+# show results 
+df.orig.trial[row_index,] %>%  
+  mutate(ve_trial = paste0(ve_trial_median, " (", ve_trial_lb, "-", ve_trial_ub, ")")) %>%
+  mutate(ve_cc_uninformative_priors = paste0(ve_uninfo_median, " (", ve_uninfo_lb, "-", ve_uninfo_ub, ")")) %>%
+  mutate(ve_cc_informative_priors = paste0(ve_info_median, " (", ve_info_lb, "-", ve_info_ub, ")")) %>%
+  dplyr::select(outcome, ve_trial, ve_cc_uninformative_priors, ve_cc_informative_priors) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+
+# look at traceplot of coefficient of vax variable
+plot(samples.uninfo[, "beta1"])
+title("beta1 (uninformative priors)")
+
+plot(samples.info[, "beta1"])
+title("beta1 (informative priors)")
+```
+
+
+#### RSV-related LRTI hospitalizations (Hammitt et al)
+  * extracted from case-control: RSV-related LRTI hospitalizations as cases vs. RSV- as controls
+```{r}
+####################################################
+# RSV-related LRTI hospitalization as endpoint (Hammitt et al)
+####################################################
+df.jags <- df %>% 
+  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 & 
+                                    encounter_type == "inpatient"  ~ 1,
+                                  positive_rsv == 0 ~ 0)) %>%
+  filter(!is.na(case_control))
+
+
+dataset_uninformative_priors <- 
+            list(
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested # month when tested
+                )
+
+dataset_informative_priors <- 
+            list(
+                # from previous study
+                N_cases_orig = c(8, 6), # (case_placebo, case_vax)
+                pop_orig = c(496, 994), # (N_placebo, N_vax)
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested, # month when tested
+                # others
+                prior_mean_log_irr = 999, 
+                set_tau_shp=999, 
+                set_tau_rate=999, 
+                prior_prec_log_irr = 999, 
+                sd.upper=999
+                )
+
+
+source("jags_commensurate_prior.R")
+
+if(rerun){
+  # model w/ uninformative priors 
+  jags.post.uninfo <- jags.model(textConnection(model_string_uninformative_priors), 
+                          data = dataset_uninformative_priors,
+                          n.chains = 3)
+
+  samples.uninfo <- coda.samples(jags.post.uninfo, 
+                          variable.names=c("int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.uninfo, "../data/jags/post/RSV_LRTI_hosp_uninfo.rds")
+  
+   # model w/ informative priors 
+  jags.post.info <- jags.model(textConnection(model_string_informative_priors), 
+                          data = dataset_informative_priors,
+                          n.chains = 3)
+
+  samples.info <- coda.samples(jags.post.info, 
+                          variable.names=c("delta", "int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.info, "../data/jags/post/RSV_LRTI_hosp_info.rds")
+  
+}else{
+  samples.uninfo <- readRDS("../data/jags/post/RSV_LRTI_hosp_uninfo.rds")
+  samples.info <- readRDS("../data/jags/post/RSV_LRTI_hosp_info.rds")
+}
+
+
+## process jags output 
+
+# uninformative priors 
+post1 <- as.data.frame(as.matrix(samples.uninfo[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.uninfo[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.uninfo[[3]][-c(1:4500),])) 
+post.uninfo <- bind_rows(post1, post2, post3)
+
+ve.median.uninfo <- round((1 - exp(median(post.uninfo$beta1)))*100,1)
+ve.lb.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.975))) *100,1)
+ve.ub.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.025)))*100, 1)
+
+# informative priors 
+post1 <- as.data.frame(as.matrix(samples.info[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.info[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.info[[3]][-c(1:4500),])) 
+post.info <- bind_rows(post1, post2, post3)
+
+ve.median.info <- round((1 - exp(median(post.info$beta1)))*100,1)
+ve.lb.info <- round((1 - exp(quantile(post.info$beta1, 0.975))) *100,1)
+ve.ub.info <- round((1 - exp(quantile(post.info$beta1, 0.025)))*100, 1)
+
+# fill in results
+row_index <- 2
+df.orig.trial$ve_uninfo_median[row_index] <- ve.median.uninfo
+df.orig.trial$ve_uninfo_lb[row_index] <- ve.lb.uninfo
+df.orig.trial$ve_uninfo_ub[row_index] <- ve.ub.uninfo
+df.orig.trial$ve_info_median[row_index] <- ve.median.info
+df.orig.trial$ve_info_lb[row_index] <- ve.lb.info
+df.orig.trial$ve_info_ub[row_index] <- ve.ub.info
+
+# show results 
+df.orig.trial[row_index,] %>%  
+  mutate(ve_trial = paste0(ve_trial_median, " (", ve_trial_lb, "-", ve_trial_ub, ")")) %>%
+  mutate(ve_cc_uninformative_priors = paste0(ve_uninfo_median, " (", ve_uninfo_lb, "-", ve_uninfo_ub, ")")) %>%
+  mutate(ve_cc_informative_priors = paste0(ve_info_median, " (", ve_info_lb, "-", ve_info_ub, ")")) %>%
+  dplyr::select(outcome, ve_trial, ve_cc_uninformative_priors, ve_cc_informative_priors) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+
+# look at traceplot of coefficient of vax variable
+plot(samples.uninfo[, "beta1"])
+title("beta1 (uninformative priors)")
+
+plot(samples.info[, "beta1"])
+title("beta1 (informative priors)")
+```
+
+#### Medically attended all-cause LRTI (Hammitt et al)
+  * extracted from case-control: records with LRTI symptoms as cases vs. those without LRTI symptoms as controls
+```{r}
+####################################################
+# RSV-related LRTI hospitalization as endpoint (Hammitt et al)
+####################################################
+df.jags <- df %>% 
+  mutate(case_control = case_when(symp_LRT_distress == 1  ~ 1,
+                                  is.na(symp_LRT_distress) ~ 0)) %>%
+  filter(!is.na(case_control))
+
+
+dataset_uninformative_priors <- 
+            list(
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested # month when tested
+                )
+
+dataset_informative_priors <- 
+            list(
+                # from previous study
+                N_cases_orig = c(62, 60), # (case_placebo, case_vax)
+                pop_orig = c(342, 686), # (N_placebo, N_vax)
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested, # month when tested
+                # others
+                prior_mean_log_irr = 999, 
+                set_tau_shp=999, 
+                set_tau_rate=999, 
+                prior_prec_log_irr = 999, 
+                sd.upper=999
+                )
+
+
+source("jags_commensurate_prior.R")
+
+if(rerun){
+  # model w/ uninformative priors 
+  jags.post.uninfo <- jags.model(textConnection(model_string_uninformative_priors), 
+                          data = dataset_uninformative_priors,
+                          n.chains = 3)
+
+  samples.uninfo <- coda.samples(jags.post.uninfo, 
+                          variable.names=c("int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.uninfo, "../data/jags/post/all_cause_LRTI_uninfo.rds")
+  
+   # model w/ informative priors 
+  jags.post.info <- jags.model(textConnection(model_string_informative_priors), 
+                          data = dataset_informative_priors,
+                          n.chains = 3)
+
+  samples.info <- coda.samples(jags.post.info, 
+                          variable.names=c("delta", "int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.info, "../data/jags/post/all_cause_LRTI_info.rds")
+  
+}else{
+  samples.uninfo <- readRDS("../data/jags/post/all_cause_LRTI_uninfo.rds")
+  samples.info <- readRDS("../data/jags/post/all_cause_LRTI_info.rds")
+}
+
+
+## process jags output 
+
+# uninformative priors 
+post1 <- as.data.frame(as.matrix(samples.uninfo[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.uninfo[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.uninfo[[3]][-c(1:4500),])) 
+post.uninfo <- bind_rows(post1, post2, post3)
+
+ve.median.uninfo <- round((1 - exp(median(post.uninfo$beta1)))*100,1)
+ve.lb.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.975))) *100,1)
+ve.ub.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.025)))*100, 1)
+
+# informative priors 
+post1 <- as.data.frame(as.matrix(samples.info[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.info[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.info[[3]][-c(1:4500),])) 
+post.info <- bind_rows(post1, post2, post3)
+
+ve.median.info <- round((1 - exp(median(post.info$beta1)))*100,1)
+ve.lb.info <- round((1 - exp(quantile(post.info$beta1, 0.975))) *100,1)
+ve.ub.info <- round((1 - exp(quantile(post.info$beta1, 0.025)))*100, 1)
+
+# fill in results
+row_index <- 3
+df.orig.trial$ve_uninfo_median[row_index] <- ve.median.uninfo
+df.orig.trial$ve_uninfo_lb[row_index] <- ve.lb.uninfo
+df.orig.trial$ve_uninfo_ub[row_index] <- ve.ub.uninfo
+df.orig.trial$ve_info_median[row_index] <- ve.median.info
+df.orig.trial$ve_info_lb[row_index] <- ve.lb.info
+df.orig.trial$ve_info_ub[row_index] <- ve.ub.info
+
+# show results 
+df.orig.trial[row_index,] %>%  
+  mutate(ve_trial = paste0(ve_trial_median, " (", ve_trial_lb, "-", ve_trial_ub, ")")) %>%
+  mutate(ve_cc_uninformative_priors = paste0(ve_uninfo_median, " (", ve_uninfo_lb, "-", ve_uninfo_ub, ")")) %>%
+  mutate(ve_cc_informative_priors = paste0(ve_info_median, " (", ve_info_lb, "-", ve_info_ub, ")")) %>%
+  dplyr::select(outcome, ve_trial, ve_cc_uninformative_priors, ve_cc_informative_priors) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+
+# look at traceplot of coefficient of vax variable
+plot(samples.uninfo[, "beta1"])
+title("beta1 (uninformative priors)")
+
+plot(samples.info[, "beta1"])
+title("beta1 (informative priors)")
+```
+
+
+#### RSV-related respiratory hospitalizations (Hammitt et al)
+  * extracted from case-control: RSV-positive hospitalizations as cases vs. RSV- as controls
+```{r}
+####################################################
+# RSV-related respiratory hospitalization as endpoint (Hammitt et al)
+####################################################
+df.jags <- df %>% 
+  mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
+                                  positive_rsv == 0 ~ 0)) %>%
+  filter(!is.na(case_control))
+
+
+dataset_uninformative_priors <- 
+            list(
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested # month when tested
+                )
+
+dataset_informative_priors <- 
+            list(
+                # from previous study
+                N_cases_orig = c(11, 9), # (case_placebo, case_vax)
+                pop_orig = c(342, 686), # (N_placebo, N_vax)
+                # from current case-control
+                N_people = nrow(df.jags),
+                case_status = df.jags$case_control,
+                vax = df.jags$rsv_mab,
+                # confounders
+                cf_age = df.jags$cf_age, # age when tested
+                cf_month_tested = df.jags$cf_month_tested, # month when tested
+                # others
+                prior_mean_log_irr = 999, 
+                set_tau_shp=999, 
+                set_tau_rate=999, 
+                prior_prec_log_irr = 999, 
+                sd.upper=999
+                )
+
+
+source("jags_commensurate_prior.R")
+
+if(rerun){
+  # model w/ uninformative priors 
+  jags.post.uninfo <- jags.model(textConnection(model_string_uninformative_priors), 
+                          data = dataset_uninformative_priors,
+                          n.chains = 3)
+
+  samples.uninfo <- coda.samples(jags.post.uninfo, 
+                          variable.names=c("int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.uninfo, "../data/jags/post/RSV_hosp_uninfo.rds")
+  
+   # model w/ informative priors 
+  jags.post.info <- jags.model(textConnection(model_string_informative_priors), 
+                          data = dataset_informative_priors,
+                          n.chains = 3)
+
+  samples.info <- coda.samples(jags.post.info, 
+                          variable.names=c("delta", "int", "beta1", "beta2", "beta3"),
+                          n.iter = 5000)
+  saveRDS(samples.info, "../data/jags/post/RSV_hosp_info.rds")
+  
+}else{
+  samples.uninfo <- readRDS("../data/jags/post/RSV_hosp_uninfo.rds")
+  samples.info <- readRDS("../data/jags/post/RSV_hosp_info.rds")
+}
+
+
+## process jags output 
+
+# uninformative priors 
+post1 <- as.data.frame(as.matrix(samples.uninfo[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.uninfo[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.uninfo[[3]][-c(1:4500),])) 
+post.uninfo <- bind_rows(post1, post2, post3)
+
+ve.median.uninfo <- round((1 - exp(median(post.uninfo$beta1)))*100,1)
+ve.lb.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.975))) *100,1)
+ve.ub.uninfo <- round((1 - exp(quantile(post.uninfo$beta1, 0.025)))*100, 1)
+
+# informative priors 
+post1 <- as.data.frame(as.matrix(samples.info[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples.info[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples.info[[3]][-c(1:4500),])) 
+post.info <- bind_rows(post1, post2, post3)
+
+ve.median.info <- round((1 - exp(median(post.info$beta1)))*100,1)
+ve.lb.info <- round((1 - exp(quantile(post.info$beta1, 0.975))) *100,1)
+ve.ub.info <- round((1 - exp(quantile(post.info$beta1, 0.025)))*100, 1)
+
+# fill in results
+row_index <- 4
+df.orig.trial$ve_uninfo_median[row_index] <- ve.median.uninfo
+df.orig.trial$ve_uninfo_lb[row_index] <- ve.lb.uninfo
+df.orig.trial$ve_uninfo_ub[row_index] <- ve.ub.uninfo
+df.orig.trial$ve_info_median[row_index] <- ve.median.info
+df.orig.trial$ve_info_lb[row_index] <- ve.lb.info
+df.orig.trial$ve_info_ub[row_index] <- ve.ub.info
+
+# show results 
+df.orig.trial[row_index,] %>%  
+  mutate(ve_trial = paste0(ve_trial_median, " (", ve_trial_lb, "-", ve_trial_ub, ")")) %>%
+  mutate(ve_cc_uninformative_priors = paste0(ve_uninfo_median, " (", ve_uninfo_lb, "-", ve_uninfo_ub, ")")) %>%
+  mutate(ve_cc_informative_priors = paste0(ve_info_median, " (", ve_info_lb, "-", ve_info_ub, ")")) %>%
+  dplyr::select(outcome, ve_trial, ve_cc_uninformative_priors, ve_cc_informative_priors) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+
+# look at traceplot of coefficient of vax variable
+plot(samples.uninfo[, "beta1"])
+title("beta1 (uninformative priors)")
+
+plot(samples.info[, "beta1"])
+title("beta1 (informative priors)")
+```
+
+
+<br>
+
+### Compare the results 
+```{r, fig.height=5, fig.width=8}
+df.compare <- df.orig.trial[1:4,] %>%
+  dplyr::select(outcome, 
+                ve_trial_median, ve_trial_lb, ve_trial_ub, 
+                ve_uninfo_median, ve_uninfo_lb, ve_uninfo_ub,
+                ve_info_median, ve_info_lb, ve_info_ub)
+
+# display the table 
+df.compare %>% 
+  mutate(ve_trial = paste0(ve_trial_median, " (", ve_trial_lb, "-", ve_trial_ub, ")")) %>%
+  mutate(ve_cc_uninformative_priors = paste0(ve_uninfo_median, " (", ve_uninfo_lb, "-", ve_uninfo_ub, ")")) %>%
+  mutate(ve_cc_informative_priors = paste0(ve_info_median, " (", ve_info_lb, "-", ve_info_ub, ")")) %>%
+  dplyr::select(outcome, ve_trial, ve_cc_uninformative_priors, ve_cc_informative_priors) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T) 
+  
+
+
+
+
+# display the figure
+colnames(df.compare) <- str_replace(colnames(df.compare), "ve_", "")
+
+plt.compare <- df.compare %>% 
+  pivot_longer(cols = 2:10, 
+               names_sep = '\\_', 
+               names_to = c("source", "metric")) %>%
+  pivot_wider(names_from = "metric", values_from = "value") %>% 
+  mutate(source = case_when(source == "trial" ~ "Phase III trial",
+                            source == "uninfo" ~ "Current case-control with uninformative priors",
+                            source == "info" ~ "Current case-control with Phase III trial data as informative priors")) %>%
+  mutate(source = factor(source, levels = c(
+    "Phase III trial",
+    "Current case-control with uninformative priors",
+    "Current case-control with Phase III trial data as informative priors"
+  ))) %>%
+  mutate(outcome = case_when(outcome == "Medically attended RSV LRTI" ~ "Medically attended \nRSV LRTI",
+                             outcome == "RSV-related LRTI hospitalization" ~ "RSV-related LRTI \n hospitalization",
+                             outcome == "Medically attended all-cause LRTI" ~ "Medically attended\n all-cause LRTI",
+                             outcome == "RSV-related respiratory hospitalization" ~ "RSV-related \nhospitalization")) %>%
+  ggplot() +
+  geom_point(aes(x = outcome, y = median, color = source), position = position_dodge(0.5)) +
+  geom_errorbar(aes(x = outcome, ymin = lb, ymax = ub, color = source), position = position_dodge(0.5),
+                width = 0.2) +
+  theme(legend.position = "top", 
+        legend.direction = "vertical",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "black")
+        ) +
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Clinical endpoint") + ylab("Efficacy / Effectiveness of \nNirsevimab (%)") +
+  labs(color = "Source of estimation")
+
+plt.compare
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

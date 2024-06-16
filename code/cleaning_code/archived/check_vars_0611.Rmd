@@ -253,11 +253,6 @@ df <- df %>%
                                           positive_adeno == 1 |
                                           positive_parainfluenza == 1, 1, 0))
 
-# write RSV+ cases for genetic information from Nate's Lab
-# a <- df %>% filter(positive_rsv == 1) %>% 
-#   dplyr::select(StudyID, `Collection Date`, DOB, `Accession #`)
-# write.csv(a, "../../data/genetic/RSV_positive_records.csv", row.names = F)
-
 ```
 
 ### Table `r tab.counter`. Viral test (taken by a record)
@@ -592,16 +587,13 @@ df %>% count(gest_age_cat) %>% arrange(desc(n)) %>% rename(n_records = n) %>%
 
 ### Figure `r fig.counter`. Birth weight
   * PENDING: Generate birth_weight_kg (numeric), low_birth_weight (binary). Low birth weight is defined as a birth weight of less than 2500 g (up to and including 2499 g), as per the World Health Organization (WHO).
-  * what is the unit of original variable Birth Wgt (ounce) 
-  * created a new variable birth_weight in grams (1 ounce = 28.3 g)
+  * what is the unit of original variable Birth Wgt (ounce??)? Haven't generated new variables (TBC?).
   * After confirming, generate risk factor indicating low birth weight.
 ```{r}
 fig.counter <- fig.counter + 1
 
-df <- df %>% mutate(birth_weight = as.numeric(`Birth Wgt`) * 28.3)
-
 df %>% 
-  mutate(birth_weight) %>%
+  mutate(birth_weight = as.numeric(`Birth Wgt`)) %>%
   ggplot() +
   geom_histogram(aes(x = birth_weight), color = "black", fill = "white") + theme_classic()
 ```
@@ -688,24 +680,23 @@ df <- df %>%
 
 # combine race and ethnicity (Method 1)
 df <- df %>% 
-  mutate(race_ethnicity_2 = case_when(race == "Black" ~ "Black",
+  mutate(race_ethnicity = case_when(race == "Black" ~ "Black",
                                     race == "White" ~ "White",
                                     race %in% c("Other", "unknown") & ethnicity %in% c("Hispanic or Latino") ~ "Hispanic or Latino",
                                     race == "Other" & ethnicity %in% c("Not Hispanic or Latino", "unknown") ~ "Other",
                                     race == "unknown" & ethnicity %in% c("Not Hispanic or Latino", "unknown") ~ "unknown",
                                     TRUE ~ "unknown"))
 
-df %>% count(race_ethnicity_2) %>% arrange(desc(n)) %>% mutate(perc = round(n/nrow(df)*100,1)) %>%
+df %>% count(race_ethnicity) %>% arrange(desc(n)) %>% mutate(perc = round(n/nrow(df)*100,1)) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
 
 <br>
 
 #### Method 2 to combine race and ethnicity:
-  * I think Carlos prefers this classification.
 ```{r echo = T}
 df <- df %>% 
-  mutate(race_ethnicity = case_when(ethnicity == "Hispanic or Latino" ~ "Hispanic",
+  mutate(race_ethnicity_2 = case_when(ethnicity == "Hispanic or Latino" ~ "Hispanic or Latino",
                                       race == "Black" & ethnicity == "Not Hispanic or Latino" ~ "Black non-Hispanic",
                                       race == "Other" & ethnicity == "Not Hispanic or Latino" ~ "Other non-Hispanic",
                                       race == "White" & ethnicity == "Not Hispanic or Latino" ~ "White non-Hispanic",
@@ -1016,23 +1007,6 @@ pattern_postterm <- paste(c("post-term",
                             "post term"),
                           collapse = "|")
 
-pattern_environmental <- paste(c("financial difficulties",
-                                 "housing instability",
-                                 "food insecurity",
-                                 "other social stressor",
-                                 "tobacco smoke exposure",
-                                 "second hand smoke exposure",
-                                 "unemployed",
-                                 "high risk social situation",
-                                 "income sufficient to buy only necessities",
-                                 "contact with or exposure to communicable disease",
-                                 "concerned about having social problem",
-                                 "social problem",
-                                 "economic hardship",
-                                 "Need for follow-up by social worker",
-                                 "homeless",
-                                 "environmental allergies",
-                                 "without employment"))
 
 
 ######################################
@@ -1087,7 +1061,7 @@ pattern_fever <- "fever|febrile"
 
 pattern_cough <- "cough"
 
-pattern_wheezing <- "wheezing" # this is used in both risk factor detection and symp detection
+pattern_wheezing <- "wheezing"
 
 pattern_breathing <- paste(c("Abnormal breathing",
                              "Breathing difficulty",
@@ -1144,11 +1118,7 @@ df <- df %>%
   mutate(med_hist_cvd = ifelse(med_hist_congen_heart == 1 & is.na(med_hist_cvd), 1, med_hist_cvd)) %>%
   mutate(med_hist_earlyterm = case_when(grepl(pattern_earlyterm, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_fullterm = case_when(grepl(pattern_fullterm, `Medical History`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Medical History`, ignore.case = T) ~ 1)) %>%
-  # added this per team's checking advice
-  mutate(med_hist_wheezing = case_when(grepl(pattern_wheezing, `Medical History`, ignore.case = T) ~ 1)) %>%
-  mutate(med_hist_environmental = case_when(grepl(pattern_environmental, `Medical History`, ignore.case = T) ~ 1))
-
+                                           !grepl(pattern_preterm, `Medical History`, ignore.case = T) ~ 1))
   
 
 ```
@@ -1177,11 +1147,7 @@ df <- df %>%
   mutate(prob_list_cvd = ifelse(prob_list_congen_heart == 1 & is.na(prob_list_cvd), 1, prob_list_cvd)) %>%
   mutate(prob_list_earlyterm = case_when(grepl(pattern_earlyterm, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_fullterm = case_when(grepl(pattern_fullterm, `Problem List`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Problem List`, ignore.case = T) ~ 1)) %>%
-  # added this per team's advice
-  mutate(prob_list_wheezing = case_when(grepl(pattern_wheezing, `Problem List`, ignore.case = T) ~ 1)) %>%
-  mutate(prob_list_environmental = case_when(grepl(pattern_environmental, `Problem List`, ignore.case = T) ~ 1))
-
+                                           !grepl(pattern_preterm, `Problem List`, ignore.case = T) ~ 1))
 ```
 
 ```{r}
@@ -1207,9 +1173,7 @@ df <- df %>%
   mutate(prim_prob_cvd = ifelse(prim_prob_congen_heart == 1 & is.na(prim_prob_cvd), 1, prim_prob_cvd)) %>%
   mutate(prim_prob_earlyterm = case_when(grepl(pattern_earlyterm, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_fullterm = case_when(grepl(pattern_fullterm, `Primary Problem`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Primary Problem`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(prim_prob_environmental = case_when(grepl(pattern_environmental, `Primary Problem`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Primary Problem`, ignore.case = T) ~ 1))
   
 
 # extract conditions related to respiratory infection
@@ -1249,9 +1213,7 @@ df <- df %>%
   mutate(ED_dx_cvd = ifelse(ED_dx_congen_heart == 1 & is.na(ED_dx_cvd), 1, ED_dx_cvd)) %>%
   mutate(ED_dx_earlyterm = case_when(grepl(pattern_earlyterm, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_fullterm = case_when(grepl(pattern_fullterm, `ED Dx`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `ED Dx`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(ED_dx_environmental = case_when(grepl(pattern_environmental, `ED Dx`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `ED Dx`, ignore.case = T) ~ 1))
 
 
 # extract conditions related to respiratory infection
@@ -1293,9 +1255,7 @@ df <- df %>%
   mutate(admit_dx_cvd = ifelse(admit_dx_congen_heart == 1 & is.na(admit_dx_cvd), 1, admit_dx_cvd)) %>%
   mutate(admit_dx_earlyterm = case_when(grepl(pattern_earlyterm, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_fullterm = case_when(grepl(pattern_fullterm, `Admit Dx`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Admit Dx`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(admit_dx_environmental = case_when(grepl(pattern_environmental, `Admit Dx`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Admit Dx`, ignore.case = T) ~ 1))
 
 # extract conditions related to respiratory infection 
 df <- df %>% 
@@ -1335,9 +1295,7 @@ df <- df %>%
   mutate(hosp_prob_cvd = ifelse(hosp_prob_congen_heart == 1 & is.na(hosp_prob_cvd), 1, hosp_prob_cvd)) %>%
   mutate(hosp_prob_earlyterm = case_when(grepl(pattern_earlyterm, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_fullterm = case_when(grepl(pattern_fullterm, `Hospital Problem List`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(hosp_prob_environmental = case_when(grepl(pattern_environmental, `Hospital Problem List`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Hospital Problem List`, ignore.case = T) ~ 1))
 
 
 # extract conditions related to respiratory infection
@@ -1365,7 +1323,6 @@ df <- df %>%
   * hosp_prob_xx
   
 #### generate new binary variables: **risk_factor_xx** indicating whether this record has certain risk factor.
-  * added risk_factor_small_for_gestage: if birth weight < 2500g, ---> 1, if birth_weight > 2500g ---> 0, if birth_weight missing ---> NA
 ```{r}
 df <- df %>% 
   mutate(risk_factor_anemia = case_when(med_hist_anemia == 1 | prob_list_anemia == 1 | prim_prob_anemia == 1 | 
@@ -1401,17 +1358,8 @@ df <- df %>%
                                            gest_age_cat == "preterm" ~ 1)) %>%
   mutate(risk_factor_postterm = case_when(med_hist_postterm == 1 | prob_list_postterm == 1 | prim_prob_postterm == 1 | 
                                           ED_dx_postterm == 1 | admit_dx_postterm == 1 | hosp_prob_postterm == 1 | 
-                                            gest_age_cat == "post term" ~ 1)) %>%
-  # added per team's checking advice 
-  mutate(risk_factor_wheezing = case_when(med_hist_wheezing == 1 | prob_list_wheezing == 1 ~ 1)) %>%
-  mutate(risk_factor_environmental = case_when(med_hist_environmental == 1 | prob_list_environmental == 1 | prim_prob_environmental == 1 | 
-                                          ED_dx_environmental == 1 | admit_dx_environmental == 1 | hosp_prob_environmental == 1 ~ 1))
+                                            gest_age_cat == "post term" ~ 1)) 
 
-
-# added per team's checking advice
-df <- df %>% 
-  mutate(risk_factor_small_for_gestage = case_when(birth_weight < 2500 ~ 1,
-                                                   birth_weight >= 2500 ~ 0))
 ```
 
 <br>
@@ -1459,8 +1407,6 @@ df.uncertain %>%
 
 ```
 
-<br>
-
 #### The team helped checked above records and classified them suspected respiratory infections or not, remove those that are not suspected respiratory infections. Deleted 212 records.
 ```{r}
 df.check.suspect <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/records_need_help.xlsx", sheet = "uncertain_suspected_respiratory") %>% mutate(collection_date = as.Date(collection_date))
@@ -1472,8 +1418,8 @@ df.check.suspect <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RS
 df.not.suspect <- df.check.suspect %>% filter(is_suspected_resp == 0)
 
 for(i in 1:nrow(df.not.suspect)){
-  id <- df.not.suspect[i,]$StudyID
-  cd <- df.not.suspect[i,]$collection_date
+  id <- df.check.suspect[i,]$StudyID
+  cd <- df.check.suspect[i,]$collection_date
   
   df <- df %>% filter(StudyID != id | collection_date != cd)
 }
@@ -1492,22 +1438,19 @@ data.frame(
   blood = nrow(df %>% filter(risk_factor_blood == 1)),
   asthma = nrow(df %>% filter(risk_factor_asthma == 1)),
   liver_disease = nrow(df %>% filter(risk_factor_liver == 1)),
-  #cvd = nrow(df %>% filter(risk_factor_cvd == 1)),
+  cvd = nrow(df %>% filter(risk_factor_cvd == 1)),
   immunodeficiency = nrow(df %>% filter(risk_factor_immunodeficiency == 1)),
-  #GI_disease = nrow(df %>% filter(risk_factor_gi == 1)),
-  #congenital_heart_disease = nrow(df %>% filter(risk_factor_congen_heart == 1)),
+  GI_disease = nrow(df %>% filter(risk_factor_gi == 1)),
+  congenital_heart_disease = nrow(df %>% filter(risk_factor_congen_heart == 1)),
   cardiac = nrow(df %>% filter(risk_factor_cardiac == 1)),
   pulmonary_disease = nrow(df %>% filter(risk_factor_pulmonary == 1)),
   down_syndrome = nrow(df %>% filter(risk_factor_down == 1)),
-  #early_term = nrow(df %>% filter(risk_factor_earlyterm == 1)),
-  #full_term = nrow(df %>% filter(risk_factor_fullterm == 1)),
+  early_term = nrow(df %>% filter(risk_factor_earlyterm == 1)),
+  full_term = nrow(df %>% filter(risk_factor_fullterm == 1)),
   preterm = nrow(df %>% filter(risk_factor_preterm == 1)),
-  #post_term = nrow(df %>% filter(risk_factor_postterm == 1)),
-  wheezing = nrow(df %>% filter(risk_factor_wheezing == 1)),
-  environmental = nrow(df %>% filter(risk_factor_environmental == 1)),
-  small_for_gestage = nrow(df %>% filter(risk_factor_small_for_gestage == 1))
+  post_term = nrow(df %>% filter(risk_factor_postterm == 1))
 ) %>%
-  pivot_longer(cols = 1:12, names_to = "risk_factor", values_to = "n_records") %>%
+  pivot_longer(cols = 1:15, names_to = "risk_factor", values_to = "n_records") %>%
   arrange(desc(n_records)) %>%
   mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -1532,14 +1475,12 @@ df <- df %>%
     is.na(gest_age_cat) & risk_factor_preterm == 1 ~ "preterm"
   )) 
 
-
 df %>% count(risk_factor_gestage) %>% arrange(desc(n)) %>% 
   mutate(perc = round(n / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 
 # a <- df %>% filter(is.na(risk_factor_gestage)) 
 # write.csv(a, "../../data/missing_gestage.csv", row.names = F)
-
 ```
 
 #### To avoid confusion, remove risk_factor_earlyterm, risk_factor_fullterm, risk_factor_preterm, risk_factor_postterm, and **only keep categorical variable risk_factor_gestage**.
@@ -1547,139 +1488,33 @@ df %>% count(risk_factor_gestage) %>% arrange(desc(n)) %>%
 df <- df %>% dplyr::select(-c(risk_factor_earlyterm, risk_factor_fullterm, risk_factor_preterm, risk_factor_postterm))
 ```
 
-<br>
-
-### The team helped check all those records that are older than 8 months on October 1st 2023 (when Nirsevimab became available) and without detection of high risk patterns. I need to do several things: 
-  * delete the older records that are not high risk individuals
-  * incorporate the risk factor information into the current dataset. (to mark if they have a risk factor or not).
-  * After discussing with Carlos, GI should not be counted as a risk factor, thus re-check those marked as having GI disease to see if they truly are high risk individuals.
-```{r}
-# read in the records checked by team
-df.risk.checked <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/records_need_help.xlsx", sheet = "uncertain_high_risk")
-
-
-df.risk.checked <- df.risk.checked %>% dplyr::select(-risk_factor_gi) %>% 
-  rename(risk_factor_wheezing = risk_factor_hx_wheezing) %>% 
-  rename(risk_factor_small_for_gestage = `risk_factors_small for gestational age`) %>%
-  mutate(across(starts_with("risk_factor"), ~ ifelse(is.na(.), 0, .))) %>%
-  mutate(sum_risk_factor = risk_factor_preterm + 
-           risk_factor_anemia +
-           risk_factor_pulmonary +
-           risk_factor_cardiac + 
-           risk_factor_asthma + 
-           risk_factor_down +
-           risk_factor_liver +
-           risk_factor_immunodeficiency + 
-           risk_factor_environmental + 
-           risk_factor_wheezing + 
-           risk_factor_small_for_gestage) 
-
-# filter out those that has no risk factors (assigned 0/1 by team) , so these infants are not eligible for Nirsevimab
-# out of the sum_risk_factor == 0 kids (totally 528), there are 132 RSV+
-# out of the sum_risk_factor == 1 kids (totally 48), there are 16 RSV+.
-StudyID.toremove <- (df.risk.checked %>% filter(sum_risk_factor == 0))$StudyID
-
-# remove these non-high-risk older infants from current df 
-df <- df %>% filter(StudyID %in% StudyID.toremove == F)
-
-# for high risk records to keep, fill in risk factor information back to df 
-df.high.risk <- df.risk.checked %>% filter(sum_risk_factor > 0) %>% 
-  dplyr::select(StudyID, starts_with("risk_factor")) %>%
-  distinct()
-
-
-for(i in 1:nrow(df.high.risk)){
-  
-  id.temp <- df.high.risk$StudyID[i]
-  df.high.risk.temp <- df.high.risk %>% filter(StudyID == id.temp)
-  
-  if(nrow(df[which(df$StudyID == id.temp),]) != 0){
-    # assign team's checking results into the current df 
-    
-    if(df.high.risk.temp$risk_factor_preterm == 1){df[which(df$StudyID == id.temp),]$risk_factor_preterm <- 1}
-    if(df.high.risk.temp$risk_factor_anemia == 1){df[which(df$StudyID == id.temp),]$risk_factor_anemia <- 1}
-    if(df.high.risk.temp$risk_factor_pulmonary == 1){df[which(df$StudyID == id.temp),]$risk_factor_pulmonary <- 1}
-    if(df.high.risk.temp$risk_factor_cardiac == 1){df[which(df$StudyID == id.temp),]$risk_factor_cardiac < 1}
-    if(df.high.risk.temp$risk_factor_asthma == 1){df[which(df$StudyID == id.temp),]$risk_factor_asthma <- 1}
-    if(df.high.risk.temp$risk_factor_down == 1){df[which(df$StudyID == id.temp),]$risk_factor_down <- 1}
-    if(df.high.risk.temp$risk_factor_liver == 1){df[which(df$StudyID == id.temp),]$risk_factor_liver <- 1}
-    if(df.high.risk.temp$risk_factor_immunodeficiency == 1){df[which(df$StudyID == id.temp),]$risk_factor_immunodeficiency <- 1}
-    if(df.high.risk.temp$risk_factor_environmental == 1){df[which(df$StudyID == id.temp),]$risk_factor_environmental <- 1}
-    if(df.high.risk.temp$risk_factor_wheezing == 1){df[which(df$StudyID == id.temp),]$risk_factor_wheezing <- 1}
-    df[which(df$StudyID == id.temp),]$risk_factor_small_for_gestage <- df.high.risk.temp$risk_factor_small_for_gestage
-    
-  }
-  
-}
-```
-
-
-```{r}
-
-## create a risk factor for gest age < 37 weeks (preterm) or >= 37 weeks
-df <- df %>% 
-  mutate(risk_factor_gestagelessthan37wks = case_when(risk_factor_gestage == "preterm" ~ 1,
-                                                       risk_factor_gestage %in% c(
-                                                         "early term", "full term",
-                                                         "late term", "post term"
-                                                       ) ~ 0))
-```
-
-<br>
-
-### Table `r tab.counter`. After incorporating team's checking of risk factors and deleting records without risk factors detected, summarize extracted risk factors again.
-  * Note that each record can have multiple risk factors. 
-```{r}
-tab.counter <- tab.counter + 1
-
-data.frame(
-  anemia = nrow(df %>% filter(risk_factor_anemia == 1)),
-  asthma = nrow(df %>% filter(risk_factor_asthma == 1)),
-  liver_disease = nrow(df %>% filter(risk_factor_liver == 1)),
-  immunodeficiency = nrow(df %>% filter(risk_factor_immunodeficiency == 1)),
-  cardiac = nrow(df %>% filter(risk_factor_cardiac == 1)),
-  pulmonary_disease = nrow(df %>% filter(risk_factor_pulmonary == 1)),
-  down_syndrome = nrow(df %>% filter(risk_factor_down == 1)),
-  wheezing = nrow(df %>% filter(risk_factor_wheezing == 1)),
-  environmental = nrow(df %>% filter(risk_factor_environmental == 1)),
-  small_for_gestage = nrow(df %>% filter(risk_factor_small_for_gestage == 1)),
-  gestage_lessthan37wks = nrow(df %>% filter(risk_factor_gestagelessthan37wks == 1))
-) %>%
-  pivot_longer(cols = 1:11, names_to = "risk_factor", values_to = "n_records") %>%
-  arrange(desc(n_records)) %>%
-  mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
-  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
-
-```
 
 <br>
 
 ### Table `r tab.counter`. Check if a record has at least one risk factor
 #### Generate this new variable to be risk_factor_atleastone.
-```{r echo = T}
+```{r}
 tab.counter <- tab.counter + 1
 
 df <- df %>%
-  mutate(risk_factor_atleastone = case_when(risk_factor_anemia == 1 |
-                                            risk_factor_asthma == 1 |
-                                            risk_factor_liver == 1 |
-                                            risk_factor_immunodeficiency == 1 |
-                                            risk_factor_cardiac == 1 |
-                                            risk_factor_pulmonary == 1 | 
-                                            risk_factor_down == 1 |
-                                            risk_factor_wheezing == 1 |
-                                            risk_factor_environmental == 1 |
-                                            risk_factor_small_for_gestage == 1 |
-                                            risk_factor_gestagelessthan37wks == 1 ~ 1,
-                                            TRUE ~ 0))
+  mutate(risk_factor_atleastone = case_when(is.na(risk_factor_anemia) & 
+                                                     is.na(risk_factor_blood) &
+                                                     is.na(risk_factor_asthma) & 
+                                                     is.na(risk_factor_liver) &
+                                                     is.na(risk_factor_cvd) &
+                                                     is.na(risk_factor_immunodeficiency) &
+                                                     is.na(risk_factor_gi) &
+                                                     is.na(risk_factor_congen_heart) &
+                                                     is.na(risk_factor_cardiac) &
+                                                     is.na(risk_factor_pulmonary) &
+                                                     is.na(risk_factor_down) &
+                                              risk_factor_gestage != "preterm" ~ 0,
+                                            TRUE ~ 1))
 
 df %>% count(risk_factor_atleastone) %>% 
   mutate(perc = round(n / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
 ```
-
-
-
 
 <br>
 
@@ -1707,30 +1542,30 @@ data.frame(
 
 <br>
 
-<!-- ### Table `r tab.counter`. There are records missing diagnosis details: -->
-<!-- #### aka. records that are missing for all following variables: -->
-<!--   * Primary Problem -->
-<!--   * ED Dx -->
-<!--   * Admit Dx -->
-<!--   * Hospital Problem List -->
+### Table `r tab.counter`. There are records missing diagnosis details:
+#### aka. records that are missing for all following variables:
+  * Primary Problem
+  * ED Dx
+  * Admit Dx
+  * Hospital Problem List
 
-<!-- This table is a subset of table 20 above. (all records here are from outpatient) For these records we can't be sure these are hospitalizations related to respiratory infection. -->
-<!-- ```{r} -->
-<!-- tab.counter <- tab.counter + 1 -->
+This table is a subset of table 20 above. (all records here are from outpatient) For these records we can't be sure these are hospitalizations related to respiratory infection.
+```{r}
+tab.counter <- tab.counter + 1
 
-<!-- df %>% filter(is.na(`ED Dx`) & is.na(`Admit Dx`) & is.na(`Primary Problem`) & is.na(`Hospital Problem List`)) %>% -->
-<!--   filter(`Fever?` == "No" & recent_temp <= 38) %>% -->
-<!--   dplyr::select(StudyID, `Fever?`, recent_temp, `Medical History`, `Problem List` -->
-<!--          , icu_admitted, encounter_type -->
-<!--          # `Primary Problem`, `ED Dx`, `Admit Dx`, `Hospital Problem List` -->
-<!--          ) %>%  -->
-<!--   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), -->
-<!--             columns = list( -->
-<!--     `Medical History` = colDef(width = 500), -->
-<!--     `Problem List` = colDef(width = 600)) -->
-<!--     ) -->
-<!-- ``` -->
-
+df %>% filter(is.na(`ED Dx`) & is.na(`Admit Dx`) & is.na(`Primary Problem`) & is.na(`Hospital Problem List`)) %>%
+  filter(`Fever?` == "No" & recent_temp <= 38) %>%
+  dplyr::select(StudyID, `Fever?`, recent_temp, `Medical History`, `Problem List`
+         , icu_admitted, encounter_type
+         # `Primary Problem`, `ED Dx`, `Admit Dx`, `Hospital Problem List`
+         ) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
+            columns = list(
+    `Medical History` = colDef(width = 500),
+    `Problem List` = colDef(width = 600))
+    )
+```
+<br>
 
 ### Mom RSV vax
 Generate binary variable mom_rsv_vaxed to indicate the infant's mother was vaccinated
@@ -1920,6 +1755,20 @@ df %>% count(highflow_oxygen) %>%
 <br>
 
 
+```{r}
+### Records that have more than one testing records 
+df.multi.tests <- df %>% filter(StudyID %in% id_multi_tests) %>% arrange(StudyID, `Collection Date`)
+
+a <- df.multi.tests %>% dplyr::select(StudyID, `mAb date`,
+             collection_date, `Admit Date`, `Hosp LoS`,  `Collection Department`, sample_source,
+             tested_viruses, positive_viruses, `Encounter Type`, encounter_type,
+            icu_admitted, date_icu_admit, icu_los_hours, 
+             `Fever?`, `Problem List`, `Primary Problem`, `ED Dx`, `Admit Dx`,`Hospital Problem List`
+             ) 
+
+
+# write_xlsx(a, "../../data/multi_tests_records.xlsx")
+```
 
 ### For each testing record, generate unique testID
 #### If a patient was tested multiple times, the testID will has values of StudyID_nthTest (e.g. 99999999_1, 9999999_2..), the suffix indicates the nth test of the patient, ordered by date of sample collection.
@@ -2008,197 +1857,7 @@ df <- df %>%
   
 ```
 
-
 <br>
-
-
-### Remove redundant testing records
-(reference: https://pubmed.ncbi.nlm.nih.gov/36454733/)
-For some patients, they were tested multiple time. Delete testing records that have repetitive results or results that could be deemed as "false-negative" before a positive test.
-
-
-#### For positive tests results: 
-  * If tested positive for RSV more than once within 14 days (difference of testing date <= 14 days), keep only one most recent RSV+ record.
-  
-##### Table `r tab.counter` Those with more than one positive tests within 14 days:
-```{r echo = T}
-tab.counter <- tab.counter + 1
-
-# those with 2 positive tests
-id.temp <- (df %>% filter(positive_rsv == 1) %>% group_by(StudyID) %>% count() %>% filter(n > 1))$StudyID
-
-# those with 2 positive tests <= 14 days apart
-id.temp <- (df %>% filter(StudyID %in% id.temp) %>% filter(positive_rsv == 1) %>% 
-  group_by(StudyID) %>% mutate(interval = as.numeric(collection_date - lag(collection_date)) ) %>% 
-  filter(interval <= 14))$StudyID
-  
-df %>% filter(StudyID %in% id.temp) %>% 
-  dplyr::select(StudyID, collection_date, positive_rsv, rsv_mab, encounter_type, icu_admitted, testID) %>%
-  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
-            groupBy = "StudyID")
-
-# only keep the most recent RSV+ record
-testID.temp <- (df %>% filter(StudyID %in% id.temp) %>% filter(positive_rsv ==1 ) %>% 
-  group_by(StudyID) %>% filter(collection_date == min(collection_date)))$testID
-df <- df %>% filter(testID %in% testID.temp == F)
-
-
-```
-
-<br>
-
-#### Now process tested negative records: 
-
-```{r echo = T}
-### Records that have more than one testing records 
-id_multi_tests <- (df %>% group_by(StudyID) %>% count() %>% filter(n > 1))$StudyID # those who had multiple tests
-df.multi.tests <- df %>% filter(StudyID %in% id_multi_tests) %>% arrange(StudyID, `Collection Date`)
-
-# those with multiple tests that we need to look at
-a <- df.multi.tests %>% dplyr::select(StudyID, testID, n_tests, positive_rsv, `mAb date`,
-             collection_date, `Admit Date`, `Hosp LoS`,  `Collection Department`, sample_source,
-             tested_viruses, positive_viruses, `Encounter Type`, encounter_type,
-            icu_admitted, date_icu_admit, icu_los_hours, 
-             `Fever?`, `Problem List`, `Primary Problem`, `ED Dx`, `Admit Dx`,`Hospital Problem List`
-             ) 
-
-#######################################
-# First look at patients with two tests
-#######################################
-
-# keep those with two tests that are >14 days apart
-testID.temp <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 2) %>%
-  group_by(StudyID) %>% mutate(interval = as.numeric( max(collection_date) - min(collection_date))) %>%
-  filter(interval > 14))$testID
-a <- a %>% filter(testID %in% testID.temp == F)  
-
-# those with two tests that are <= 14 days apart
-# 1) if there is a positive test, keep only the positive test 
-testID.toremove1 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 2) %>%
-  group_by(StudyID) %>% mutate(interval = as.numeric(max(collection_date) - min(collection_date))) %>%
-  filter(interval <= 14) %>% 
-  group_by(StudyID) %>% filter(max(positive_rsv) - min(positive_rsv) == 1) %>%
-  filter(positive_rsv == 0))$testID
-# 2) if the two both are negative tests:
-# 2.1) if have different encounter_type (one inpatient, one outpatient record), keep the inpatient one
-testID.toremove2 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 2) %>%
-  group_by(StudyID) %>% mutate(interval = as.numeric(max(collection_date) - min(collection_date))) %>%
-  filter(interval <= 14) %>% 
-  group_by(StudyID) %>% filter(max(positive_rsv) == 0) %>%
-  mutate(n = n_distinct(encounter_type)) %>%
-  dplyr::select(testID, positive_rsv, encounter_type, n) %>% 
-  filter(n == 2 & encounter_type == "outpatient"))$testID
-# 2.2) if the two testing records have same encounter_type,  keep the latest negative test 
-testID.toremove3 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 2) %>%
-  group_by(StudyID) %>% mutate(interval = as.numeric(max(collection_date) - min(collection_date))) %>%
-  filter(interval <= 14) %>% 
-  group_by(StudyID) %>% filter(max(positive_rsv) == 0) %>%
-  mutate(n = n_distinct(encounter_type)) %>%
-  dplyr::select(testID, collection_date, positive_rsv, encounter_type, n) %>% 
-  filter(n == 1) %>%
-  group_by(StudyID) %>%
-  filter(collection_date == min(collection_date)))$testID
-
-df <- df %>% filter(testID %in% c(testID.toremove1, testID.toremove2, testID.toremove3) == F)
-
-
-
-#######################################
-# Then look at patients with three tests
-#######################################
-a <- df %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 3) %>% ungroup()
-
-# records with test1 and test2 within 14 days OR test2 and test3 within 14 days
-temp <- a %>% group_by(StudyID) %>%
-  filter(as.numeric(median(collection_date) - min(collection_date)) <= 14  |
-           as.numeric(max(collection_date) - median(collection_date)) <= 14) %>% 
-  dplyr::select(testID, collection_date, positive_rsv, encounter_type, rsv_mab, icu_admitted) 
-
-# Manually checked these and remove records
-testID.toremove <- c(
-                     # repeated earlier RSV- record
-                     "130575661_1", 
-                     "130580756_2", 
-                     "130602887_2", 
-                     "130620929_1", 
-                     "130623083_1", 
-                     "130623828_1", 
-                     "130626581_2",
-                     "130634844_2",
-                     "130643173_2",
-                     "130658437_2",
-                     "130665947_2",
-                     "130679674_1",
-                     "130710408_2",
-                     "130734145_1",
-                     "130746903_1",
-                     "130751613_1",
-                     "130752807_1",
-                     "130780764_2",
-                     # repeated earlier RSV- record in outpatient
-                     "130632441_2",
-                     "130657344_1",
-                     "130702757_1",
-                     "130715070_1",
-                     "130745292_1",
-                     "130751754_2",
-                     # earlier RSV- followed by RSV+ 
-                     "130700254_1",
-                     "130740342_1",
-                     # RSV- right after RSV+
-                     "130728751_3"
-                     )
-df <- df %>% filter(testID %in% testID.toremove == F)
-
-
-#######################################
-# Then look at patients with >3 tests
-#######################################
-a <- df %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp > 3) %>% ungroup()
-
-# records with test1 and test2 within 14 days OR test2 and test3 within 14 days
-temp <- a %>% group_by(StudyID) %>%
-  dplyr::select(testID, collection_date, positive_rsv, encounter_type, rsv_mab, icu_admitted) 
-
-# Manually checked these and remove records
-testID.toremove <- c(
-  # RSV- followed by RSV+ 
-  "130577503_1", 
-  # repeated RSV- record
-  "130577503_3",
-  "130585212_2",
-  "130606175_1",
-  "130609940_1",
-  "130609940_3",
-  "130624871_3",
-  "130635378_1",
-  "130654546_1",
-  "130666500_1",
-  "130666500_3",
-  "130705659_1",
-  "130705659_2",
-  "130709635_1",
-  "130709635_2",
-  "130709635_4",
-  "130719972_3",
-  "130719972_5",
-  "130749578_3",
-  "130752957_1",
-  "130757819_1",
-  "130757819_3",
-  # earlier RSV- outpatient later admitted
-  "130603130_1",
-  "130644922_1",
-  # repeated RSV- in outpatient
-  "130603130_3",
-  # RSV- later admitted to ICU
-  "130749578_1"
-)
-
-df <- df %>% filter(testID %in% testID.toremove == F)
-
-```
-
 
 ### Save the cleaned dataset to be used for analyses.
 
@@ -2216,28 +1875,122 @@ if(save_recoded_dataset){
 ```
 
 
-### Table `r tab.counter` Take a look at number of tested positive and tested negative records
+<br>
+
+### Mark testing records as cases and controls
+(reference: https://pubmed.ncbi.nlm.nih.gov/36454733/)
+
+#### Test-positive cases: 
+  * A case of test-positive is defined as a positive RSV test. 
+
+#### Test-negative controls:
+  * Define test-negative control as a negative RSV test 
+    + collected at any time if this patient was tested only once, **OR**
+    + collected > 7 days prior this patient's next test **AND** collected > 7 days after this patient's last test (if the patient was tested multiple times)
+
+#### Other notes:
+  * An individual patient is allowed to contribute as both case and control, as the analysis is to be conducted at test-level, instead of patient-level. 
+  * Each patient can contribute to up to three negative tests (controls) (TBC).
+  *	If a person had more than one negative test within 7-day period, one random test was selected during the period as a control.
+
+```{r echo = T}
+##########################
+# mark test-positive cases
+##########################
+
+df <- df %>% mutate(case_control = ifelse(positive_rsv == 1, "case", NA)) 
+
+#############################
+# mark test-negative controls
+#############################
+
+# generate a binary indicator to mark if this patient's next test is RSV positive (didn't use this) 
+df <- df %>% 
+  group_by(StudyID) %>%
+  mutate(next_test_rsv_positive = lead(positive_rsv)) %>% 
+  # NA if a person was tested once or this is a last test of an individual
+  as.data.frame()
+  
+
+df <- df %>%
+  group_by(StudyID) %>% 
+  mutate(case_control = case_when(
+  # 1. the patient was only tested once and was rsv negative
+    (positive_rsv == 0 & n_tests == 1) | 
+  # 2. the patient was tested multiple times: 
+    # 2.1 if this is not the first or last test of the patient 
+    # this negative test should be >7 days prior next test AND >7 days after previous test
+    (positive_rsv == 0 & n_tests > 1 & days_to_next_collection > 7 & days_since_last_collection > 7) |
+    # 2.2 if this is the first test of the patient
+    # this negative test should be > 7 days prior next test
+    (positive_rsv == 0 & n_tests > 1 & nth_test == 1 & days_to_next_collection > 7) |
+    # 2.3 if this is the last test of the patient
+    # this negative test should be > 7 days after previous test
+    (positive_rsv == 0 & n_tests > 1 & nth_test == n_tests & days_since_last_collection > 7) ~ "control",
+    TRUE ~ case_control
+  )) %>% as.data.frame()
+
+
+# If a person had more than one negative test within 7-day period, one random test was selected during the period as a control
+set.seed(123)
+temp <- df %>% 
+  group_by(StudyID) %>%
+  filter( 
+    (  ((days_to_next_collection <= 7 | days_since_last_collection <= 7) & nth_test != 1 & n_tests != nth_test) | # tests in the middle 
+       (nth_test == 1 & days_to_next_collection <= 7) | # first test
+       (nth_test == n_tests & days_since_last_collection <= 7) # last test
+    ) &  positive_rsv == 0)  %>%
+  mutate(n_controls_to_sample_from = n()) %>%
+  dplyr::select(StudyID, n_controls_to_sample_from) %>% unique()
+  
+
+df <- df %>% left_join(temp, by = "StudyID")
+  
+# random select one control 
+randomly.selected.controls.ids <- (df %>%
+  filter(n_controls_to_sample_from > 1 & is.na(case_control)) %>%
+  group_by(StudyID) %>% 
+  sample_n(1) %>% 
+  mutate(control_randomly_selected = 1))$testID
+  
+# mark these controls
+df <- df %>% 
+  mutate(randomly_selected_control = ifelse(testID %in% randomly.selected.controls.ids, 1, 0)) %>% 
+  mutate(case_control = ifelse(randomly_selected_control == 1, "control", case_control))
+
+# # individual patients contribute more than three controls (n = 17)
+# df %>% 
+#   group_by(StudyID) %>%
+#   count(case_control) %>% 
+#   filter(n>1) %>%
+#   arrange(desc(n), StudyID) %>% 
+#   filter(case_control == "control") %>%
+#   filter(n > 3)
+
+```
+
+### Table `r tab.counter` Take a look at number of cases and controls.
 ```{r}
 tab.counter <- tab.counter + 1
-df %>% count(positive_rsv) %>% 
+df %>% count(case_control) %>% 
   mutate(perc = round(n/nrow(df)*100, 1)) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px")) 
 ```
 
 <br>
 
-### Table `r tab.counter`. There are patients who contributed two one RSV+ records
-#### These RSV+ records are all > 14 days apart, thus kept them.
+### Table `r tab.counter`. There are patients who contributed 2 cases.
+#### (TBC) Should we include all test-positive records as cases? Or if the two test-positive results for the same individual happened within 7(?) days, we only keep one case for this individual?
 ```{r}
 tab.counter <- tab.counter + 1
 
-# there are several patients who contributed two RSV+ records:
-id_multi_rsv_positive <- (df %>% group_by(StudyID) %>% count(positive_rsv) %>% filter(positive_rsv == 1) %>% filter(n>1))$StudyID
+# there are several patients who contributed two cases:
+id_multi_cases <- (df %>% group_by(StudyID) %>% count(case_control) %>% filter(case_control == "case") %>% filter(n>1))$StudyID
 
-df %>% filter(StudyID %in% id_multi_rsv_positive) %>% 
-  dplyr::select(StudyID, testID, collection_date, positive_viruses) %>%
+df %>% filter(StudyID %in% id_multi_cases) %>% 
+  dplyr::select(StudyID, collection_date, tested_viruses, positive_viruses, case_control) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
-            groupBy = "StudyID") 
+            groupBy = "StudyID", defaultExpanded = T) 
 ```
 
 <br>
@@ -2279,19 +2032,22 @@ table1( ~ factor(Sex) +
           factor(encounter_type) +
           factor(insurance_type) +
           factor(risk_factor_gestage) +
-          factor(risk_factor_cardiac) +
+          factor(risk_factor_cvd) +
           factor(risk_factor_gi) +
           factor(risk_factor_pulmonary) +
           factor(risk_factor_asthma) +
           factor(risk_factor_anemia) 
-        | positive_rsv, data = df, overall= F,
+        | rsv_mab, data = df, overall= F,
           extra.col=list(`P-value`=pvalue))
 
 ```
 
 
-<br>
 
+
+
+
+<br>
 
 
 
