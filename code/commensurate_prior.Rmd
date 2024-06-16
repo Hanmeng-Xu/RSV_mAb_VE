@@ -595,7 +595,7 @@ title("beta1 (informative priors)")
 <br>
 
 ### Compare the results 
-```{r, fig.height=5, fig.width=8}
+```{r, fig.height=5, fig.width=7}
 df.compare <- df.orig.trial[1:4,] %>%
   dplyr::select(outcome, 
                 ve_trial_median, ve_trial_lb, ve_trial_ub, 
@@ -610,9 +610,6 @@ df.compare %>%
   dplyr::select(outcome, ve_trial, ve_cc_uninformative_priors, ve_cc_informative_priors) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
             defaultExpanded = T) 
-  
-
-
 
 
 # display the figure
