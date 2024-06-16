@@ -649,7 +649,6 @@ plt.compare <- df.compare %>%
   labs(color = "Source of estimation")
 
 plt.compare
-
 ```
 
 

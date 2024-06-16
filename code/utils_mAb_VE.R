@@ -1,4 +1,11 @@
 
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+
 ###############################
 # some processing of dataset
 ###############################
@@ -102,7 +109,7 @@ process_df <- function(df.cc){
 
 
 ###############################
-# Functions for VE estimation
+# Functions for VE estimation (regression models)
 ###############################
 
 ## unmatched  model (unstratified)
@@ -156,9 +163,103 @@ regress_unmatch <- function(df.ve,
 }
 
 
+########################################################
+### Function to convert VE to  forest plot 
+########################################################
+ve_forest <- function(df.plot = ve){
+  
+  # breakdown adjusted ve estimates from character to numeric columns (median, lb, ub)
+  a <- matrix(unlist(strsplit(df.plot$ve_adj, "\\(")), ncol = 2, byrow = T) %>% 
+    as.data.frame() %>%
+    mutate(V2 = str_replace(V2, "\\)", "")) %>% 
+    mutate(n_dash = str_count(V2, "-"))
+  
+  a$ve_adj_lb <- NA
+  a$ve_adj_ub <- NA
+  
+  a[which(a$n_dash == 1),]$ve_adj_lb <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,1])
+  a[which(a$n_dash == 1),]$ve_adj_ub <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
+  
+  a[which(a$n_dash == 2),]$ve_adj_lb <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
+  a[which(a$n_dash == 2),]$ve_adj_ub <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  
+  a <- a %>% dplyr::rename(ve_adj_median = V1)
+  
+  df.plot <- cbind(df.plot, a %>% dplyr::select(starts_with("ve_adj"))) %>% 
+    mutate(across(c(ve_adj_median, ve_adj_lb, ve_adj_ub), ~ as.numeric(.)))
+  
+  # add some vars for plotting
+  df.plot <- df.plot %>% 
+    # too low lb --> stops at -50% with an arrow 
+    mutate(add_arrow = ifelse(ve_adj_lb < -50, 1, 0)) %>% 
+    mutate(ve_adj_lb = ifelse(add_arrow == 1, -50, ve_adj_lb)) 
+  
+  # create labels as the first row
+  df.plt <- 
+    rbind(
+    data.frame(case = "Case\n",
+               control = "Control\n",
+               n_cases_mab = "Cases \n(Nirsevimab-recepient)\n",
+               n_cases_nomab = "Cases \n(Non-recepient)\n",
+               n_controls_mab = "Controls \n(Nirsevimab-recepient)\n",
+               n_controls_nomab = "Controls \n(Non-recepient)\n",
+               ve_unadj = "Unadjusted VE (95% CI)\n",
+               ve_adj = "Adjusted VE (95% CI)\n",
+               ve_adj_median = NA,
+               ve_adj_lb = NA, 
+               ve_adj_ub = NA,
+               add_arrow = 0
+              ),
+    df.plot
+  )
+  
+  df.plt <- df.plt %>% 
+    mutate(ve_index = factor(1:nrow(df.plt), levels = as.character(nrow(df.plt):1)))
+  
+  plt.left <- df.plt %>% 
+    ggplot(aes(y = ve_index)) +
+    geom_text(aes(x = 0, label = case), hjust = 0) +
+    geom_text(aes(x = 1.5, label = control), hjust = 0) +
+    # geom_text(aes(x = 2.4, label = n_cases_mab), hjust = 0) +
+    # geom_text(aes(x = 2.8, label = n_controls_mab), hjust = 0) +
+    # geom_text(aes(x = 3.5, label = n_cases_nomab), hjust = 0) +
+    # geom_text(aes(x = 4.2, label = n_controls_nomab), hjust = 0) +
+    geom_text(aes(x = 2.3, label = ve_unadj), hjust = 0) +
+    geom_text(aes(x = 3.4, label = ve_adj), hjust = 0) +
+    theme_void() +
+    coord_cartesian(xlim = c(0, 4))
+  
+  df.plt.arrow <- df.plt %>% filter(add_arrow == 1)
+    
+  plt.right <- 
+    ggplot(aes(y = ve_index), data = df.plt) +
+    geom_point(aes(x= ve_adj_median), shape=15, size=3, data = df.plt) +
+    geom_linerange(aes(xmin = ve_adj_lb, xmax = ve_adj_ub), data = df.plt)  +
+    geom_segment(aes(x = ve_adj_ub, xend = ve_adj_lb, 
+                  y = ve_index, yend = ve_index), data = df.plt.arrow,  
+                 arrow = arrow(length = unit(2, "mm"))) +
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+    xlab("Effectiveness of Nirsevimab (%)") +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.line.y = element_blank(),
+          axis.line = element_line(colour = "black"))
+    
+  layout <- c(
+    area(t = 0, l = 0, b = 30, r = 6.3), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+    area(t = 1, l = 7.5, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  )
+  
+  # final plot arrangement
+  plt <- plt.left +  plt.right + plot_layout(design = layout)
 
-### Function to convert VE to plots 
+  return(plt)
 
+ }
 
 
 
