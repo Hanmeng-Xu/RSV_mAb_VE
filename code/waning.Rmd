@@ -1,0 +1,2142 @@
+---
+title: "Waning VE of Nirsevimab"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+#### Date: `r Sys.Date()`
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(readxl)
+library(writexl)
+library(reactable)
+library(ggplot2)
+library(stringr)
+library(flextable)
+library(lubridate)
+library(rjags)
+
+
+library(gtsummary) # for table 1
+library(multcomp)
+library(survival) # for matched case-control
+
+fig.counter <- 1
+tab.counter <- 1
+
+source("utils_mAb_VE.R")
+source("jags_waning.R")
+
+rerun <- FALSE
+savenewplot <- TRUE
+```
+
+
+```{r}
+# read in dataset
+df <- read.csv("../data/clean_data/df.mab.csv") %>% 
+  mutate(collection_date = as.Date(collection_date))
+colnames <- as.data.frame(colnames(df))
+
+# add some variables 
+df <- process_df(df)
+
+
+df <- df %>% 
+  # recode confounders
+  mutate(cf_birth_weight = birth_weight) %>% # about 25% missing 
+  mutate(cf_age = case_when(age_at_test_in_months_cat_2 == "under 3m" ~ 1,
+                            age_at_test_in_months_cat_2 == "3-6m" ~ 2,
+                            age_at_test_in_months_cat_2 == "6-9m" ~ 3,
+                            age_at_test_in_months_cat_2 == "9-12m" ~ 4,
+                            age_at_test_in_months_cat_2 == "above 1 yo" ~ 5)) %>%
+  mutate(cf_month_tested = case_when(month_when_tested_cat == "Oct-Nov" ~ 1,
+                                     month_when_tested_cat == "Dec-Jan" ~ 2,
+                                     month_when_tested_cat == "Feb-Mar" ~ 3,
+                                     month_when_tested_cat == "April and after" ~ 4
+                                     )) %>%
+  # convert confounders to dummy variables 
+  mutate(cf_age_1 = ifelse(cf_age == 1, 1, 0),
+         cf_age_2 = ifelse(cf_age == 2, 1, 0),
+         cf_age_3 = ifelse(cf_age == 3, 1, 0),
+         cf_age_4 = ifelse(cf_age == 4, 1, 0), 
+         cf_age_5 = ifelse(cf_age == 5, 1, 0)) %>%
+  mutate(cf_month_tested_1 = ifelse(cf_month_tested == 1, 1, 0),
+         cf_month_tested_2 = ifelse(cf_month_tested == 2, 1, 0),
+         cf_month_tested_3 = ifelse(cf_month_tested == 3, 1, 0),
+         cf_month_tested_4 = ifelse(cf_month_tested == 4, 1, 0))
+```
+
+<br>
+
+### VE over time by **1-month** interval {.tabset}
+
+  * classify time since vax to testing into three groups: 0-1, 1-2, 2-3, 3-4 and >4 months
+  * included confounders: age tested, month tested.
+  * uninformative prior for precision of the non-negative increment d's.
+    + d ~ dnorm(0, tau)T(0,)
+    + tau_d ~ dgamma(0.01, 0.01)
+    
+#### Table
+```{r}
+source("jags_waning.R")
+
+df <- df %>%
+  # vax time groups 
+  mutate(vax_time_group1 = ifelse(days_btw_mab_collection_cat_3 == "0-1 months", 1, 0)) %>%
+  mutate(vax_time_group2 = ifelse(days_btw_mab_collection_cat_3 == "1-2 months", 1, 0)) %>%
+  mutate(vax_time_group3 = ifelse(days_btw_mab_collection_cat_3 == "2-3 months", 1, 0)) %>%
+  mutate(vax_time_group4 = ifelse(days_btw_mab_collection_cat_3 == "3-4 months", 1, 0)) %>%
+  mutate(vax_time_group5 = ifelse(days_btw_mab_collection_cat_3 == "4 months +", 1, 0))
+
+###################################
+# Against RSV infection 
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% mutate(case_control = positive_rsv) 
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+  
+
+dataset_1monthinterval_infection <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
+                          data = dataset_1monthinterval_infection,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_1monthinterval_infection.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_1monthinterval_infection.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+# look at the result
+ve.1monthinterval.infection <- 
+  data.frame(
+  against = rep("RSV infection", 6),
+  vax_time = c("not vaccinated",
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
+    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
+    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
+    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
+    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+# for plotting 
+df.ve.1monthinterval.infection <- 
+  data.frame(
+  against = rep("RSV infection", 5),
+  vax_time = c(
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
+  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
+  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
+  )
+
+
+
+# 
+# plot(samples[, "beta1"])
+# title("beta1")
+# plot(samples[, "beta2"])
+# title("beta2")
+# plot(samples[, "beta3"])
+# title("beta3")
+# plot(samples[, "beta4"])
+# title("beta4")
+# plot(samples[, "beta5"])
+# title("beta5")
+
+
+###################################
+# Against RSV LRTI
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(symp_LRT_distress == 1) %>%
+  mutate(case_control = positive_rsv)
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+
+
+dataset_1monthinterval_RSVLRTI <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
+                          data = dataset_1monthinterval_RSVLRTI,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVLRTI.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVLRTI.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+# look at the result
+ve.1monthinterval.RSVLRTI <- 
+  data.frame(
+  against = rep("RSV LRTI", 6),
+  vax_time = c("not vaccinated",
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
+    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
+    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
+    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
+    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+
+# for plotting 
+df.ve.1monthinterval.RSVLRTI <- 
+  data.frame(
+  against = rep("RSV LRTI", 5),
+  vax_time = c(
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
+  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
+  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
+  )
+
+###################################
+# Against RSV outpatient visit
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(encounter_type == "outpatient") %>%
+  mutate(case_control = positive_rsv)
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+
+dataset_1monthinterval_RSVoutpatient <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
+                          data = dataset_1monthinterval_RSVoutpatient,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVoutpatient.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVoutpatient.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+# look at the result
+ve.1monthinterval.RSVoutpatient <- 
+  data.frame(
+  against = rep("RSV outpatient visit", 6),
+  vax_time = c("not vaccinated",
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
+    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
+    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
+    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
+    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+
+# for plotting 
+df.ve.1monthinterval.RSVoutpatient <- 
+  data.frame(
+  against = rep("RSV outpatient visit", 5),
+  vax_time = c(
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
+  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
+  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
+  )
+
+
+
+
+###################################
+# Against RSV hosp
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(encounter_type == "inpatient") %>%
+  mutate(case_control = positive_rsv)
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+
+dataset_1monthinterval_RSVhosp <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
+                          data = dataset_1monthinterval_RSVhosp,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVhosp.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVhosp.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+# look at the result
+ve.1monthinterval.RSVhosp <- 
+  data.frame(
+  against = rep("RSV hospitalization", 6),
+  vax_time = c("not vaccinated",
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
+    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
+    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
+    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
+    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+
+# for plotting 
+df.ve.1monthinterval.RSVhosp <- 
+  data.frame(
+  against = rep("RSV hospitalization", 5),
+  vax_time = c(
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
+  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
+  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
+  )
+
+###################################
+# Against RSV LRTI hosp
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(encounter_type == "inpatient" & symp_LRT_distress == 1) %>%
+  mutate(case_control = positive_rsv)
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+
+dataset_1monthinterval_RSVLRTIhosp <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
+                          data = dataset_1monthinterval_RSVLRTIhosp,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVLRTIhosp.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVLRTIhosp.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+# look at the result
+ve.1monthinterval.RSVLRTIhosp <- 
+  data.frame(
+  against = rep("RSV LRTI hospitalization", 6),
+  vax_time = c("not vaccinated",
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
+    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
+    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
+    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
+    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+
+# for plotting 
+df.ve.1monthinterval.RSVLRTIhosp <- 
+  data.frame(
+  against = rep("RSV LRTI hospitalization", 5),
+  vax_time = c(
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
+  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
+  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
+  )
+
+
+###################################
+# Against RSV severe outcomes
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(icu_admitted == "yes" | highflow_oxygen == 1) %>%
+  mutate(case_control = positive_rsv)
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+
+dataset_1monthinterval_RSVsevere <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
+                          data = dataset_1monthinterval_RSVsevere,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVsevere.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVsevere.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+# look at the result
+ve.1monthinterval.RSVsevere <- 
+  data.frame(
+  against = rep("RSV severe outcomes", 6),
+  vax_time = c("not vaccinated",
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
+    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
+    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
+    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
+    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+
+# for plotting 
+df.ve.1monthinterval.RSVsevere <- 
+  data.frame(
+  against = rep("RSV severe outcomes", 5),
+  vax_time = c(
+               "vaccinated 0-1 months ago",
+               "vaccinated 1-2 months ago",
+               "vaccinated 2-3 months ago",
+               "vaccinated 3-4 months ago",
+               "vaccinated 4+ months ago"),
+  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
+  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
+  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
+  )
+
+
+
+  
+
+# look at all the results with 1-month interval
+ve.1monthinterval.infection %>%
+  rbind(ve.1monthinterval.RSVoutpatient, 
+        ve.1monthinterval.RSVhosp,
+        ve.1monthinterval.RSVLRTI, 
+        ve.1monthinterval.RSVLRTIhosp,
+        ve.1monthinterval.RSVsevere) %>% 
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T, groupBy = "against") 
+
+# save the data table 
+tab.ve.wane.1m <- 
+  ve.1monthinterval.infection %>%
+  rbind(ve.1monthinterval.RSVoutpatient, 
+        ve.1monthinterval.RSVhosp,
+        ve.1monthinterval.RSVLRTI, 
+        ve.1monthinterval.RSVLRTIhosp,
+        ve.1monthinterval.RSVsevere) %>%
+  mutate(vax_time = case_when(vax_time == "not vaccinated" ~ "Not vaccinated",
+                                    vax_time == "vaccinated 0-1 months ago" ~ "(0, 1)",
+                                    vax_time == "vaccinated 1-2 months ago" ~ "[1, 2)", 
+                                    vax_time == "vaccinated 2-3 months ago" ~ "[2, 3)", 
+                                    vax_time == "vaccinated 3-4 months ago" ~ "[3, 4)", 
+                                    vax_time == "vaccinated 4+ months ago" ~ "[4, )")) %>%
+  dplyr::select(against, vax_time, n_cases, n_controls, VE.adjusted) %>%
+  flextable() %>%
+  set_header_labels(against = "Outcome prevented",
+                    vax_time = "Time since vaccination (months)",
+                    n_cases = "RSV positive",
+                    n_controls = "RSV negative",
+                    VE.adjusted = "Adjusted VE (95% CI)"
+                    ) %>%
+  merge_at(i = 1:6, j = 1) %>%
+  merge_at(i = 7:12, j = 1) %>%
+  merge_at(i = 13:18, j = 1) %>%
+  merge_at(i = 19:24, j = 1) %>%
+  merge_at(i = 25:30, j = 1) %>%
+  width(j = c(1,2,5), width = 2) %>%
+  vline() %>%
+  hline()
+
+if(savenewplot){
+  save_as_docx(tab.ve.wane.1m, path = "../figs_tabs/tables/jags.wane.1m.docx")
+}
+  
+```
+
+#### waning figure, showing full CIs
+```{r fig.width = 12, fig.height = 4}
+df.plt.wane <- 
+  df.ve.1monthinterval.infection %>%
+  rbind(df.ve.1monthinterval.RSVoutpatient, 
+        df.ve.1monthinterval.RSVhosp,
+        df.ve.1monthinterval.RSVLRTI, 
+        df.ve.1monthinterval.RSVLRTIhosp,
+        df.ve.1monthinterval.RSVsevere) %>% 
+  mutate(time_since_vax = case_when(vax_time == "vaccinated 0-1 months ago" ~ "1",
+                                    vax_time == "vaccinated 1-2 months ago" ~ "2", 
+                                    vax_time == "vaccinated 2-3 months ago" ~ "3", 
+                                    vax_time == "vaccinated 3-4 months ago" ~ "4", 
+                                    vax_time == "vaccinated 4+ months ago" ~ "4+")) %>%
+  mutate(VE = paste0(round(VE.median), " (", round(VE.lb), ", ", round(VE.ub), ")")) %>% 
+  mutate(time_since_vax = factor(time_since_vax, levels = c("1", "2","3","4","4+"))) %>% 
+  mutate(against = paste0("Against ", against)) %>%
+  mutate(against = factor(against, levels = c("Against RSV infection",
+                                              "Against RSV outpatient visit",
+                                              "Against RSV hospitalization",
+                                              "Against RSV LRTI",
+                                              "Against RSV LRTI hospitalization",
+                                              "Against RSV severe outcomes")))
+
+df.plt.wane %>%
+  ggplot() +
+  geom_point(aes(x = time_since_vax, y = VE.median, color = against), 
+             position = position_dodge(0.5)) +
+  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub, color = against), 
+                width = 0, position = position_dodge(0.5)) +
+  geom_text(aes(x = time_since_vax, y = VE.median, color = against, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 2.5) +
+  theme_classic() +
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Effectiveness of Nirsevimab (%)") +
+  xlab("Time since vaccination (months)") +
+  labs(color = "Clinical endpoint")
+
+```
+
+#### Waning figure, showing partial CIs
+```{r fig.width = 12, fig.height = 4}
+df.no.arrow <- 
+  df.plt.wane %>%
+  mutate(add_arrow = ifelse(VE.lb <= -25, 1, 0)) %>%
+  mutate(VE.lb = ifelse(add_arrow == 1, -25, VE.lb)) %>% 
+  mutate(across(starts_with("VE"), ~ ifelse(add_arrow == 1, NA, .)))
+
+df.add.arrow <- 
+  df.plt.wane %>%
+  mutate(add_arrow = ifelse(VE.lb <= -25, 1, 0)) %>%
+  mutate(VE.lb = ifelse(add_arrow == 1, -25, VE.lb)) %>% 
+  mutate(across(starts_with("VE"), ~ ifelse(add_arrow != 1, NA, .)))
+
+# adjusted arrows to parallel
+# https://stackoverflow.com/questions/67853990/geom-segment-parallel-dodging
+space_between_bars <- 0.145
+df.add.arrow$against_x_adj = scale(as.numeric(as.factor(df.add.arrow$against))) * space_between_bars
+df.add.arrow$x = as.numeric(as.factor(df.add.arrow$time_since_vax)) + df.add.arrow$against_x_adj
+
+
+ggplot() +
+  # if lb > -25
+  geom_point(aes(x = time_since_vax, y = VE.median, color = against), 
+             position = position_dodge(0.5), data = df.no.arrow) +
+  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub, color = against), 
+                width = 0, position = position_dodge(0.5), data = df.no.arrow) +
+  geom_text(aes(x = time_since_vax, y = VE.median, color = against, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 3, data = df.no.arrow) +
+  # if lb < -25
+  geom_point(aes(x = time_since_vax, y = VE.median, color = against), 
+             position = position_dodge(0.5), data = df.add.arrow) +
+  geom_segment(aes(x = x, xend = x, 
+                   y = VE.ub, yend = VE.lb, color = against),
+               arrow = arrow(length = unit(2, "mm")),
+               position = position_dodge(0.5),
+               data = df.add.arrow, show_guide = F) +
+  geom_text(aes(x = time_since_vax, y = VE.median, color = against, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 3, data = df.add.arrow) +
+  theme_classic() +
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Effectiveness of Nirsevimab (%)") +
+  xlab("Time since vaccination (months)") +
+  labs(color = "Clinical endpoint") +
+  ylim(c(-25,100))  +
+  scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
+                     labels = c("-25", "0", "25", "50", "75", "100"))
+```
+
+#### one outcome per panel
+```{r fig.width = 9, fig.height = 6}
+plt.jags.wane.1m <- 
+  ggplot() +
+  # if lb > -25
+  geom_point(aes(x = time_since_vax, y = VE.median), 
+             position = position_dodge(0.5), data = df.no.arrow) +
+  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub), 
+                width = 0, position = position_dodge(0.5), data = df.no.arrow) +
+  geom_text(aes(x = time_since_vax, y = VE.median-10, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4, data = df.no.arrow) +
+  # if lb < -25
+  geom_point(aes(x = time_since_vax, y = VE.median), 
+             position = position_dodge(0.5), data = df.add.arrow) +
+  geom_segment(aes(x = time_since_vax, xend = time_since_vax, 
+                   y = VE.ub, yend = VE.lb),
+               arrow = arrow(length = unit(2, "mm")),
+               position = position_dodge(0.5),
+               data = df.add.arrow, show_guide = F) +
+  geom_text(aes(x = time_since_vax, y = (VE.ub+30)/2, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4, data = df.add.arrow) +
+  theme_classic() +
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Effectiveness of Nirsevimab (%)") +
+  xlab("Time since vaccination (months)") +
+  labs(color = "Clinical endpoint") +
+  ylim(c(-25,100)) +
+  scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
+                     labels = c("-25", "0", "25", "50", "75", "100")) +
+  facet_wrap( ~ against) +
+   theme(
+    #panel.grid.major = element_line(color = "grey", linewidth = 0.1), 
+    #panel.grid.minor = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    strip.text.x = element_text(size = 12), 
+        strip.text.y = element_text(size = 11)
+     )
+        
+
+plt.jags.wane.1m
+
+if(savenewplot){
+  ggsave(plot = plt.jags.wane.1m, filename = "../figs_tabs/figures/jags.wane.1m.pdf", height = 6, width = 9)
+}
+```
+
+<br>
+
+
+### VE over time by **biweek** interval {.tabset}
+
+  * classify time since vax to testing by biweek interval.
+  * included confounders : age tested, month tested
+  * uninformative prior for precision of the non-negative increment d's.
+    + d ~ dnorm(0, tau)T(0,)
+    + tau_d ~ dgamma(0.01, 0.01)
+    
+#### Table
+```{r}
+source("jags_waning.R")
+
+df <- df %>%
+  mutate(vax_time_group1 = ifelse(weeks_btw_mab_collection_cat == "(0, 2)", 1, 0),
+         vax_time_group2 = ifelse(weeks_btw_mab_collection_cat == "[2, 4)", 1, 0),
+         vax_time_group3 = ifelse(weeks_btw_mab_collection_cat == "[4, 6)", 1, 0),
+         vax_time_group4 = ifelse(weeks_btw_mab_collection_cat == "[6, 8)", 1, 0),
+         vax_time_group5 = ifelse(weeks_btw_mab_collection_cat == "[8, 10)", 1, 0),
+         vax_time_group6 = ifelse(weeks_btw_mab_collection_cat == "[10, 12)", 1, 0),
+         vax_time_group7 = ifelse(weeks_btw_mab_collection_cat == "[12, 14)", 1, 0),
+         vax_time_group8 = ifelse(weeks_btw_mab_collection_cat == "[14, 16)", 1, 0),
+         vax_time_group9 = ifelse(weeks_btw_mab_collection_cat == "[16, )", 1, 0)
+         ) 
+
+###################################
+# Against RSV infection 
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% mutate(case_control = positive_rsv) 
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+  
+
+dataset_biwkinterval_infection <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                vax_time_group6 = df.jags$vax_time_group6,
+                vax_time_group7 = df.jags$vax_time_group7,
+                vax_time_group8 = df.jags$vax_time_group8,
+                vax_time_group9 = df.jags$vax_time_group9,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_biwkinterval), 
+                          data = dataset_biwkinterval_infection,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
+                                           "beta7", "beta8", "beta9"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_biwkinterval_infection.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_biwkinterval_infection.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.1 <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.1 <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.2 <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.2 <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.2 <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.3 <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.3 <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.3 <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.4 <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.4 <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.4 <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.5 <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.5 <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.5 <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+ve.median.6 <- round((1 - exp(median(post$beta6)))*100,1)
+ve.lb.6 <- round((1 - exp(quantile(post$beta6, 0.975))) *100,1)
+ve.ub.6 <- round((1 - exp(quantile(post$beta6, 0.025)))*100, 1)
+
+ve.median.7 <- round((1 - exp(median(post$beta7)))*100,1)
+ve.lb.7 <- round((1 - exp(quantile(post$beta7, 0.975))) *100,1)
+ve.ub.7 <- round((1 - exp(quantile(post$beta7, 0.025)))*100, 1)
+
+ve.median.8 <- round((1 - exp(median(post$beta8)))*100,1)
+ve.lb.8 <- round((1 - exp(quantile(post$beta8, 0.975))) *100,1)
+ve.ub.8 <- round((1 - exp(quantile(post$beta8, 0.025)))*100, 1)
+
+ve.median.9 <- round((1 - exp(median(post$beta9)))*100,1)
+ve.lb.9 <- round((1 - exp(quantile(post$beta9, 0.975))) *100,1)
+ve.ub.9 <- round((1 - exp(quantile(post$beta9, 0.025)))*100, 1)
+
+# look at the result
+ve.biwkinterval.infection <- 
+  data.frame(
+  against = rep("RSV infection", 10),
+  vax_time = c("not vaccinated",
+               "(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.1, " (", ve.lb.1, "-", ve.ub.1, ")"),
+    paste0(ve.median.2, " (", ve.lb.2, "-", ve.ub.2, ")"),
+    paste0(ve.median.3, " (", ve.lb.3, "-", ve.ub.3, ")"),
+    paste0(ve.median.4, " (", ve.lb.4, "-", ve.ub.4, ")"),
+    paste0(ve.median.5, " (", ve.lb.5, "-", ve.ub.5, ")"),
+    paste0(ve.median.6, " (", ve.lb.6, "-", ve.ub.6, ")"),
+    paste0(ve.median.7, " (", ve.lb.7, "-", ve.ub.7, ")"),
+    paste0(ve.median.8, " (", ve.lb.8, "-", ve.ub.8, ")"),
+    paste0(ve.median.9, " (", ve.lb.9, "-", ve.ub.9, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$weeks_btw_mab_collection_cat, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+# for plotting 
+df.ve.biwkinterval.infection <- 
+  data.frame(
+  against = rep("RSV infection", 9),
+  vax_time = c("(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.median = c(ve.median.1, ve.median.2, ve.median.3, ve.median.4, ve.median.5, ve.median.6,
+                ve.median.7, ve.median.8, ve.median.9),
+  VE.lb = c(ve.lb.1, ve.lb.2, ve.lb.3, ve.lb.4, ve.lb.5,
+            ve.lb.6, ve.lb.7, ve.lb.8, ve.lb.9),
+  VE.ub = c(ve.ub.1, ve.ub.2, ve.ub.3, ve.ub.4, ve.ub.5,
+            ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
+  )
+
+
+
+# 
+# plot(samples[, "beta1"])
+# title("beta1")
+
+
+
+###################################
+# Against RSV LRTI
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(symp_LRT_distress == 1) %>%
+  mutate(case_control = positive_rsv) 
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+  
+
+dataset_biwkinterval_RSVLRTI <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                vax_time_group6 = df.jags$vax_time_group6,
+                vax_time_group7 = df.jags$vax_time_group7,
+                vax_time_group8 = df.jags$vax_time_group8,
+                vax_time_group9 = df.jags$vax_time_group9,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_biwkinterval), 
+                          data = dataset_biwkinterval_RSVLRTI,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
+                                           "beta7", "beta8", "beta9"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVLRTI.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVLRTI.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.1 <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.1 <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.2 <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.2 <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.2 <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.3 <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.3 <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.3 <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.4 <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.4 <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.4 <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.5 <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.5 <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.5 <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+ve.median.6 <- round((1 - exp(median(post$beta6)))*100,1)
+ve.lb.6 <- round((1 - exp(quantile(post$beta6, 0.975))) *100,1)
+ve.ub.6 <- round((1 - exp(quantile(post$beta6, 0.025)))*100, 1)
+
+ve.median.7 <- round((1 - exp(median(post$beta7)))*100,1)
+ve.lb.7 <- round((1 - exp(quantile(post$beta7, 0.975))) *100,1)
+ve.ub.7 <- round((1 - exp(quantile(post$beta7, 0.025)))*100, 1)
+
+ve.median.8 <- round((1 - exp(median(post$beta8)))*100,1)
+ve.lb.8 <- round((1 - exp(quantile(post$beta8, 0.975))) *100,1)
+ve.ub.8 <- round((1 - exp(quantile(post$beta8, 0.025)))*100, 1)
+
+ve.median.9 <- round((1 - exp(median(post$beta9)))*100,1)
+ve.lb.9 <- round((1 - exp(quantile(post$beta9, 0.975))) *100,1)
+ve.ub.9 <- round((1 - exp(quantile(post$beta9, 0.025)))*100, 1)
+
+# look at the result
+ve.biwkinterval.RSVLRTI <- 
+  data.frame(
+  against = rep("RSV LRTI", 10),
+  vax_time = c("not vaccinated",
+               "(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.1, " (", ve.lb.1, "-", ve.ub.1, ")"),
+    paste0(ve.median.2, " (", ve.lb.2, "-", ve.ub.2, ")"),
+    paste0(ve.median.3, " (", ve.lb.3, "-", ve.ub.3, ")"),
+    paste0(ve.median.4, " (", ve.lb.4, "-", ve.ub.4, ")"),
+    paste0(ve.median.5, " (", ve.lb.5, "-", ve.ub.5, ")"),
+    paste0(ve.median.6, " (", ve.lb.6, "-", ve.ub.6, ")"),
+    paste0(ve.median.7, " (", ve.lb.7, "-", ve.ub.7, ")"),
+    paste0(ve.median.8, " (", ve.lb.8, "-", ve.ub.8, ")"),
+    paste0(ve.median.9, " (", ve.lb.9, "-", ve.ub.9, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$weeks_btw_mab_collection_cat, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+# for plotting 
+df.ve.biwkinterval.RSVLRTI <- 
+  data.frame(
+  against = rep("RSV LRTI", 9),
+  vax_time = c("(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.median = c(ve.median.1, ve.median.2, ve.median.3, ve.median.4, ve.median.5, ve.median.6,
+                ve.median.7, ve.median.8, ve.median.9),
+  VE.lb = c(ve.lb.1, ve.lb.2, ve.lb.3, ve.lb.4, ve.lb.5,
+            ve.lb.6, ve.lb.7, ve.lb.8, ve.lb.9),
+  VE.ub = c(ve.ub.1, ve.ub.2, ve.ub.3, ve.ub.4, ve.ub.5,
+            ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
+  )
+
+
+###################################
+# Against RSV outpatient visit
+###################################
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(encounter_type == "outpatient") %>%
+  mutate(case_control = positive_rsv) 
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+  
+
+dataset_biwkinterval_RSVoutpatient <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                vax_time_group6 = df.jags$vax_time_group6,
+                vax_time_group7 = df.jags$vax_time_group7,
+                vax_time_group8 = df.jags$vax_time_group8,
+                vax_time_group9 = df.jags$vax_time_group9,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_biwkinterval), 
+                          data = dataset_biwkinterval_RSVoutpatient,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
+                                           "beta7", "beta8", "beta9"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVoutpatient.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVoutpatient.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.1 <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.1 <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.2 <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.2 <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.2 <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.3 <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.3 <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.3 <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.4 <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.4 <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.4 <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.5 <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.5 <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.5 <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+ve.median.6 <- round((1 - exp(median(post$beta6)))*100,1)
+ve.lb.6 <- round((1 - exp(quantile(post$beta6, 0.975))) *100,1)
+ve.ub.6 <- round((1 - exp(quantile(post$beta6, 0.025)))*100, 1)
+
+ve.median.7 <- round((1 - exp(median(post$beta7)))*100,1)
+ve.lb.7 <- round((1 - exp(quantile(post$beta7, 0.975))) *100,1)
+ve.ub.7 <- round((1 - exp(quantile(post$beta7, 0.025)))*100, 1)
+
+ve.median.8 <- round((1 - exp(median(post$beta8)))*100,1)
+ve.lb.8 <- round((1 - exp(quantile(post$beta8, 0.975))) *100,1)
+ve.ub.8 <- round((1 - exp(quantile(post$beta8, 0.025)))*100, 1)
+
+ve.median.9 <- round((1 - exp(median(post$beta9)))*100,1)
+ve.lb.9 <- round((1 - exp(quantile(post$beta9, 0.975))) *100,1)
+ve.ub.9 <- round((1 - exp(quantile(post$beta9, 0.025)))*100, 1)
+
+# look at the result
+ve.biwkinterval.RSVoutpatient <- 
+  data.frame(
+  against = rep("RSV outpatient visit", 10),
+  vax_time = c("not vaccinated",
+               "(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.1, " (", ve.lb.1, "-", ve.ub.1, ")"),
+    paste0(ve.median.2, " (", ve.lb.2, "-", ve.ub.2, ")"),
+    paste0(ve.median.3, " (", ve.lb.3, "-", ve.ub.3, ")"),
+    paste0(ve.median.4, " (", ve.lb.4, "-", ve.ub.4, ")"),
+    paste0(ve.median.5, " (", ve.lb.5, "-", ve.ub.5, ")"),
+    paste0(ve.median.6, " (", ve.lb.6, "-", ve.ub.6, ")"),
+    paste0(ve.median.7, " (", ve.lb.7, "-", ve.ub.7, ")"),
+    paste0(ve.median.8, " (", ve.lb.8, "-", ve.ub.8, ")"),
+    paste0(ve.median.9, " (", ve.lb.9, "-", ve.ub.9, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$weeks_btw_mab_collection_cat, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+# for plotting 
+df.ve.biwkinterval.RSVoutpatient <- 
+  data.frame(
+  against = rep("RSV outpatient visit", 9),
+  vax_time = c("(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.median = c(ve.median.1, ve.median.2, ve.median.3, ve.median.4, ve.median.5, ve.median.6,
+                ve.median.7, ve.median.8, ve.median.9),
+  VE.lb = c(ve.lb.1, ve.lb.2, ve.lb.3, ve.lb.4, ve.lb.5,
+            ve.lb.6, ve.lb.7, ve.lb.8, ve.lb.9),
+  VE.ub = c(ve.ub.1, ve.ub.2, ve.ub.3, ve.ub.4, ve.ub.5,
+            ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
+  )
+
+###################################
+# Against RSV hosp
+###################################
+
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(encounter_type == "inpatient") %>%
+  mutate(case_control = positive_rsv) 
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+  
+
+dataset_biwkinterval_RSVhosp <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                vax_time_group6 = df.jags$vax_time_group6,
+                vax_time_group7 = df.jags$vax_time_group7,
+                vax_time_group8 = df.jags$vax_time_group8,
+                vax_time_group9 = df.jags$vax_time_group9,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_biwkinterval), 
+                          data = dataset_biwkinterval_RSVhosp,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
+                                           "beta7", "beta8", "beta9"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVhosp.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVhosp.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.1 <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.1 <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.2 <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.2 <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.2 <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.3 <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.3 <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.3 <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.4 <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.4 <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.4 <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.5 <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.5 <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.5 <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+ve.median.6 <- round((1 - exp(median(post$beta6)))*100,1)
+ve.lb.6 <- round((1 - exp(quantile(post$beta6, 0.975))) *100,1)
+ve.ub.6 <- round((1 - exp(quantile(post$beta6, 0.025)))*100, 1)
+
+ve.median.7 <- round((1 - exp(median(post$beta7)))*100,1)
+ve.lb.7 <- round((1 - exp(quantile(post$beta7, 0.975))) *100,1)
+ve.ub.7 <- round((1 - exp(quantile(post$beta7, 0.025)))*100, 1)
+
+ve.median.8 <- round((1 - exp(median(post$beta8)))*100,1)
+ve.lb.8 <- round((1 - exp(quantile(post$beta8, 0.975))) *100,1)
+ve.ub.8 <- round((1 - exp(quantile(post$beta8, 0.025)))*100, 1)
+
+ve.median.9 <- round((1 - exp(median(post$beta9)))*100,1)
+ve.lb.9 <- round((1 - exp(quantile(post$beta9, 0.975))) *100,1)
+ve.ub.9 <- round((1 - exp(quantile(post$beta9, 0.025)))*100, 1)
+
+# look at the result
+ve.biwkinterval.RSVhosp <- 
+  data.frame(
+  against = rep("RSV hospitalization", 10),
+  vax_time = c("not vaccinated",
+               "(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.1, " (", ve.lb.1, "-", ve.ub.1, ")"),
+    paste0(ve.median.2, " (", ve.lb.2, "-", ve.ub.2, ")"),
+    paste0(ve.median.3, " (", ve.lb.3, "-", ve.ub.3, ")"),
+    paste0(ve.median.4, " (", ve.lb.4, "-", ve.ub.4, ")"),
+    paste0(ve.median.5, " (", ve.lb.5, "-", ve.ub.5, ")"),
+    paste0(ve.median.6, " (", ve.lb.6, "-", ve.ub.6, ")"),
+    paste0(ve.median.7, " (", ve.lb.7, "-", ve.ub.7, ")"),
+    paste0(ve.median.8, " (", ve.lb.8, "-", ve.ub.8, ")"),
+    paste0(ve.median.9, " (", ve.lb.9, "-", ve.ub.9, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$weeks_btw_mab_collection_cat, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+# for plotting 
+df.ve.biwkinterval.RSVhosp <- 
+  data.frame(
+  against = rep("RSV hospitalization", 9),
+  vax_time = c("(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.median = c(ve.median.1, ve.median.2, ve.median.3, ve.median.4, ve.median.5, ve.median.6,
+                ve.median.7, ve.median.8, ve.median.9),
+  VE.lb = c(ve.lb.1, ve.lb.2, ve.lb.3, ve.lb.4, ve.lb.5,
+            ve.lb.6, ve.lb.7, ve.lb.8, ve.lb.9),
+  VE.ub = c(ve.ub.1, ve.ub.2, ve.ub.3, ve.ub.4, ve.ub.5,
+            ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
+  )
+
+###################################
+# Against RSV LRTI hosp
+###################################
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(symp_LRT_distress == 1 & encounter_type == "inpatient") %>%
+  mutate(case_control = positive_rsv) 
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+  
+
+dataset_biwkinterval_RSVLRTIhosp <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                vax_time_group6 = df.jags$vax_time_group6,
+                vax_time_group7 = df.jags$vax_time_group7,
+                vax_time_group8 = df.jags$vax_time_group8,
+                vax_time_group9 = df.jags$vax_time_group9,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_biwkinterval), 
+                          data = dataset_biwkinterval_RSVLRTIhosp,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
+                                           "beta7", "beta8", "beta9"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVLRTIhosp.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVLRTIhosp.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.1 <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.1 <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.2 <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.2 <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.2 <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.3 <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.3 <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.3 <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.4 <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.4 <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.4 <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.5 <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.5 <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.5 <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+ve.median.6 <- round((1 - exp(median(post$beta6)))*100,1)
+ve.lb.6 <- round((1 - exp(quantile(post$beta6, 0.975))) *100,1)
+ve.ub.6 <- round((1 - exp(quantile(post$beta6, 0.025)))*100, 1)
+
+ve.median.7 <- round((1 - exp(median(post$beta7)))*100,1)
+ve.lb.7 <- round((1 - exp(quantile(post$beta7, 0.975))) *100,1)
+ve.ub.7 <- round((1 - exp(quantile(post$beta7, 0.025)))*100, 1)
+
+ve.median.8 <- round((1 - exp(median(post$beta8)))*100,1)
+ve.lb.8 <- round((1 - exp(quantile(post$beta8, 0.975))) *100,1)
+ve.ub.8 <- round((1 - exp(quantile(post$beta8, 0.025)))*100, 1)
+
+ve.median.9 <- round((1 - exp(median(post$beta9)))*100,1)
+ve.lb.9 <- round((1 - exp(quantile(post$beta9, 0.975))) *100,1)
+ve.ub.9 <- round((1 - exp(quantile(post$beta9, 0.025)))*100, 1)
+
+# look at the result
+ve.biwkinterval.RSVLRTIhosp <- 
+  data.frame(
+  against = rep("RSV LRTI hospitalization", 10),
+  vax_time = c("not vaccinated",
+               "(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.1, " (", ve.lb.1, "-", ve.ub.1, ")"),
+    paste0(ve.median.2, " (", ve.lb.2, "-", ve.ub.2, ")"),
+    paste0(ve.median.3, " (", ve.lb.3, "-", ve.ub.3, ")"),
+    paste0(ve.median.4, " (", ve.lb.4, "-", ve.ub.4, ")"),
+    paste0(ve.median.5, " (", ve.lb.5, "-", ve.ub.5, ")"),
+    paste0(ve.median.6, " (", ve.lb.6, "-", ve.ub.6, ")"),
+    paste0(ve.median.7, " (", ve.lb.7, "-", ve.ub.7, ")"),
+    paste0(ve.median.8, " (", ve.lb.8, "-", ve.ub.8, ")"),
+    paste0(ve.median.9, " (", ve.lb.9, "-", ve.ub.9, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$weeks_btw_mab_collection_cat, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+# for plotting 
+df.ve.biwkinterval.RSVLRTIhosp<- 
+  data.frame(
+  against = rep("RSV LRTI hospitalization", 9),
+  vax_time = c("(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.median = c(ve.median.1, ve.median.2, ve.median.3, ve.median.4, ve.median.5, ve.median.6,
+                ve.median.7, ve.median.8, ve.median.9),
+  VE.lb = c(ve.lb.1, ve.lb.2, ve.lb.3, ve.lb.4, ve.lb.5,
+            ve.lb.6, ve.lb.7, ve.lb.8, ve.lb.9),
+  VE.ub = c(ve.ub.1, ve.ub.2, ve.ub.3, ve.ub.4, ve.ub.5,
+            ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
+  )
+
+###################################
+# Against RSV severe outcomes
+###################################
+# prepare the input dataset for jags 
+df.jags <- df %>% 
+  filter(icu_admitted == "yes" | highflow_oxygen == 1) %>%
+  mutate(case_control = positive_rsv) 
+
+# # include birth weight and gestage<37wks as confounders 
+# df.jags <- df.jags %>%
+#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+  
+
+dataset_biwkinterval_RSVsevere <- 
+            list(
+                N_records = nrow(df.jags),
+                vax = df.jags$rsv_mab,
+                vax_time_group1 = df.jags$vax_time_group1,
+                vax_time_group2 = df.jags$vax_time_group2,
+                vax_time_group3 = df.jags$vax_time_group3,
+                vax_time_group4 = df.jags$vax_time_group4,
+                vax_time_group5 = df.jags$vax_time_group5,
+                vax_time_group6 = df.jags$vax_time_group6,
+                vax_time_group7 = df.jags$vax_time_group7,
+                vax_time_group8 = df.jags$vax_time_group8,
+                vax_time_group9 = df.jags$vax_time_group9,
+                case_status = df.jags$case_control,
+                # confounders
+                cf_birth_weight = df.jags$birth_weight,
+                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
+                cf_age_1 = df.jags$cf_age_1, # age when tested
+                cf_age_2 = df.jags$cf_age_2,
+                cf_age_3 = df.jags$cf_age_3,
+                cf_age_4 = df.jags$cf_age_4,
+                cf_age_5 = df.jags$cf_age_5,
+                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
+                cf_month_tested_2 = df.jags$cf_month_tested_2,
+                cf_month_tested_3 = df.jags$cf_month_tested_3,
+                cf_month_tested_4 = df.jags$cf_month_tested_4
+                )
+
+source("jags_waning.R")
+
+if(rerun){
+  
+  jags.post <- rjags::jags.model(textConnection(model_string_waning_biwkinterval), 
+                          data = dataset_biwkinterval_RSVsevere,
+                          n.chains = 3)
+
+  samples <- rjags::coda.samples(jags.post, 
+                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
+                                           "beta7", "beta8", "beta9"),
+                          n.iter = 5000)
+  saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVsevere.rds")
+
+}else{
+  samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVsevere.rds")
+}
+
+post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post <- bind_rows(post1, post2, post3)
+
+ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
+ve.lb.1 <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
+ve.ub.1 <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
+
+ve.median.2 <- round((1 - exp(median(post$beta2)))*100,1)
+ve.lb.2 <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
+ve.ub.2 <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
+
+ve.median.3 <- round((1 - exp(median(post$beta3)))*100,1)
+ve.lb.3 <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
+ve.ub.3 <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
+
+ve.median.4 <- round((1 - exp(median(post$beta4)))*100,1)
+ve.lb.4 <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
+ve.ub.4 <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
+
+ve.median.5 <- round((1 - exp(median(post$beta5)))*100,1)
+ve.lb.5 <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
+ve.ub.5 <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
+
+ve.median.6 <- round((1 - exp(median(post$beta6)))*100,1)
+ve.lb.6 <- round((1 - exp(quantile(post$beta6, 0.975))) *100,1)
+ve.ub.6 <- round((1 - exp(quantile(post$beta6, 0.025)))*100, 1)
+
+ve.median.7 <- round((1 - exp(median(post$beta7)))*100,1)
+ve.lb.7 <- round((1 - exp(quantile(post$beta7, 0.975))) *100,1)
+ve.ub.7 <- round((1 - exp(quantile(post$beta7, 0.025)))*100, 1)
+
+ve.median.8 <- round((1 - exp(median(post$beta8)))*100,1)
+ve.lb.8 <- round((1 - exp(quantile(post$beta8, 0.975))) *100,1)
+ve.ub.8 <- round((1 - exp(quantile(post$beta8, 0.025)))*100, 1)
+
+ve.median.9 <- round((1 - exp(median(post$beta9)))*100,1)
+ve.lb.9 <- round((1 - exp(quantile(post$beta9, 0.975))) *100,1)
+ve.ub.9 <- round((1 - exp(quantile(post$beta9, 0.025)))*100, 1)
+
+# look at the result
+ve.biwkinterval.RSVsevere <- 
+  data.frame(
+  against = rep("RSV severe outcomes", 10),
+  vax_time = c("not vaccinated",
+               "(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.adjusted = c(
+    "REF",
+    paste0(ve.median.1, " (", ve.lb.1, "-", ve.ub.1, ")"),
+    paste0(ve.median.2, " (", ve.lb.2, "-", ve.ub.2, ")"),
+    paste0(ve.median.3, " (", ve.lb.3, "-", ve.ub.3, ")"),
+    paste0(ve.median.4, " (", ve.lb.4, "-", ve.ub.4, ")"),
+    paste0(ve.median.5, " (", ve.lb.5, "-", ve.ub.5, ")"),
+    paste0(ve.median.6, " (", ve.lb.6, "-", ve.ub.6, ")"),
+    paste0(ve.median.7, " (", ve.lb.7, "-", ve.ub.7, ")"),
+    paste0(ve.median.8, " (", ve.lb.8, "-", ve.ub.8, ")"),
+    paste0(ve.median.9, " (", ve.lb.9, "-", ve.ub.9, ")")
+  )
+) %>% 
+  cbind(
+    table(df.jags$weeks_btw_mab_collection_cat, df.jags$case_control) %>%
+      matrix(ncol = 2)
+  ) %>%
+  dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+# for plotting 
+df.ve.biwkinterval.RSVsevere <- 
+  data.frame(
+  against = rep("RSV severe outcomes", 9),
+  vax_time = c("(0, 2)",
+               "[2, 4)",
+               "[4, 6)",
+               "[6, 8)",
+               "[8, 10)",
+               "[10, 12)",
+               "[12, 14)",
+               "[14, 16)",
+               "[16, )"),
+  VE.median = c(ve.median.1, ve.median.2, ve.median.3, ve.median.4, ve.median.5, ve.median.6,
+                ve.median.7, ve.median.8, ve.median.9),
+  VE.lb = c(ve.lb.1, ve.lb.2, ve.lb.3, ve.lb.4, ve.lb.5,
+            ve.lb.6, ve.lb.7, ve.lb.8, ve.lb.9),
+  VE.ub = c(ve.ub.1, ve.ub.2, ve.ub.3, ve.ub.4, ve.ub.5,
+            ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
+  )
+
+  
+
+# look at all the results with 1-month interval
+ve.biwkinterval.infection %>%
+  rbind(ve.biwkinterval.RSVoutpatient, 
+        ve.biwkinterval.RSVhosp,
+        ve.biwkinterval.RSVLRTI, 
+        ve.biwkinterval.RSVLRTIhosp,
+        ve.biwkinterval.RSVsevere) %>% 
+  dplyr::rename(weeks_since_vax = vax_time) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T, groupBy = "against") 
+
+# save the data table 
+tab.ve.wane.biwk <- 
+  ve.biwkinterval.infection %>%
+  rbind(ve.biwkinterval.RSVoutpatient, 
+        ve.biwkinterval.RSVhosp,
+        ve.biwkinterval.RSVLRTI, 
+        ve.biwkinterval.RSVLRTIhosp,
+        ve.biwkinterval.RSVsevere) %>%
+  dplyr::select(against, vax_time, n_cases, n_controls, VE.adjusted) %>%
+  flextable() %>%
+  set_header_labels(against = "Outcome prevented",
+                    vax_time = "Time since vaccination (weeks)",
+                    n_cases = "RSV positive",
+                    n_controls = "RSV negative",
+                    VE.adjusted = "Adjusted VE (95% CI)"
+                    ) %>%
+  merge_at(i = 1:10, j = 1) %>%
+  merge_at(i = 11:20, j = 1) %>%
+  merge_at(i = 21:30, j = 1) %>%
+  merge_at(i = 31:40, j = 1) %>%
+  merge_at(i = 41:50, j = 1) %>%
+  merge_at(i = 51:60, j = 1) %>%
+  width(j = c(1,2,5), width = 2) %>%
+  vline() %>%
+  hline()
+
+if(savenewplot){
+  save_as_docx(tab.ve.wane.biwk, path = "../figs_tabs/tables/jags.wane.biwk.docx")
+}
+  
+```
+
+#### one outcome per panel
+
+```{r fig.width = 12, fig.height = 8}
+df.plt.wane.biwk <- 
+  df.ve.biwkinterval.infection %>%
+  rbind(df.ve.biwkinterval.RSVoutpatient, 
+        df.ve.biwkinterval.RSVhosp,
+        df.ve.biwkinterval.RSVLRTI, 
+        df.ve.biwkinterval.RSVLRTIhosp,
+        df.ve.biwkinterval.RSVsevere) %>%
+  mutate(time_since_vax = case_when(
+    vax_time == "(0, 2)" ~ "2",
+    vax_time == "[2, 4)" ~ "4",
+    vax_time == "[4, 6)" ~ "6",
+    vax_time == "[6, 8)" ~ "8",
+    vax_time == "[8, 10)" ~ "10",
+    vax_time == "[10, 12)" ~ "12",
+    vax_time == "[12, 14)" ~ "14",
+    vax_time == "[14, 16)" ~ "16",
+    vax_time == "[16, )" ~ "16+"
+  )) %>%
+  mutate(VE = paste0(round(VE.median), " (", round(VE.lb), ", ", round(VE.ub), ")")) %>% 
+  # mutate(time_since_vax = factor(time_since_vax, levels = c("(0, 2)", "[2, 4)", "[4, 6)", "[6, 8)",
+  #                                                           "[8, 10)", "[10, 12)", "[12, 14)", "[14, 16)", "[16, )"))) %>% 
+  mutate(time_since_vax = factor(time_since_vax, levels = c("2", "4", "6", "8",
+                                                            "10", "12", "14", "16", "16+"))) %>% 
+  mutate(against = paste0("Against ", against)) %>%
+  mutate(against = factor(against, levels = c("Against RSV infection",
+                                              "Against RSV outpatient visit",
+                                              "Against RSV hospitalization",
+                                              "Against RSV LRTI",
+                                              "Against RSV LRTI hospitalization",
+                                              "Against RSV severe outcomes")))
+
+df.no.arrow <- 
+  df.plt.wane.biwk %>%
+  mutate(add_arrow = ifelse(VE.lb <= -25, 1, 0)) %>%
+  mutate(VE.lb = ifelse(add_arrow == 1, -25, VE.lb)) %>% 
+  mutate(across(starts_with("VE"), ~ ifelse(add_arrow == 1, NA, .)))
+
+df.add.arrow <- 
+  df.plt.wane.biwk %>%
+  mutate(add_arrow = ifelse(VE.lb <= -25, 1, 0)) %>%
+  mutate(VE.lb = ifelse(add_arrow == 1, -25, VE.lb)) %>% 
+  mutate(across(starts_with("VE"), ~ ifelse(add_arrow != 1, NA, .)))
+
+
+
+plt.jags.wane.biwk <- 
+  ggplot() +
+  # if lb > -25
+  geom_point(aes(x = time_since_vax, y = VE.median), 
+             position = position_dodge(0.5), data = df.no.arrow) +
+  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub), 
+                width = 0, position = position_dodge(0.5), data = df.no.arrow) +
+  geom_text(aes(x = time_since_vax, y = VE.median-10, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4.3, data = df.no.arrow) +
+  # if lb < -25
+  geom_point(aes(x = time_since_vax, y = VE.median), 
+             position = position_dodge(0.5), data = df.add.arrow) +
+  geom_segment(aes(x = time_since_vax, xend = time_since_vax, 
+                   y = VE.ub, yend = VE.lb),
+               arrow = arrow(length = unit(2, "mm")),
+               position = position_dodge(0.5),
+               data = df.add.arrow, show_guide = F) +
+  geom_text(aes(x = time_since_vax, y = VE.median-10, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4.3, data = df.add.arrow) +
+  theme_classic() +
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Effectiveness of Nirsevimab (%)") +
+  xlab("Time since vaccination (weeks)") +
+  labs(color = "Clinical endpoint") +
+  ylim(c(-25,100)) +
+  scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
+                     labels = c("-25", "0", "25", "50", "75", "100")) +
+  facet_wrap( ~ against) +
+   theme(
+    #panel.grid.major = element_line(color = "grey", linewidth = 0.1), 
+    #panel.grid.minor = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    strip.text.x = element_text(size = 12), 
+        strip.text.y = element_text(size = 11)
+     )
+        
+
+plt.jags.wane.biwk
+
+if(savenewplot){
+  ggsave(plot = plt.jags.wane.biwk, filename = "../figs_tabs/figures/jags.wane.biwk.pdf", height = 8, width = 12)
+}
+
+```
+
+
+
+
+
+
+
+
+

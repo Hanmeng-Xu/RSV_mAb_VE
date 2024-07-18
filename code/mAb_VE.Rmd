@@ -33,6 +33,8 @@ fig.counter <- 1
 tab.counter <- 1
 
 source("utils_mAb_VE.R")
+
+savenewplot <- FALSE
 ```
 
 
@@ -43,12 +45,39 @@ df <- read.csv("../data/clean_data/df.mab.csv") %>%
 colnames <- as.data.frame(colnames(df))
 
 # add some variables 
-df <- process_df(df.cc = df)
+df <- process_df(df)
 ```
 
 
-
 ### There are totally `r nrow(df)` testing records in the analysis dataset. 
+
+### Figure `r fig.counter`. Look at distribution of testing by time 
+```{r, fig.width = 8, fig.height = 4}
+fig.counter <- fig.counter + 1
+
+plt.collection.date <- 
+  df %>% 
+  filter(collection_date >= as.Date("2023-10-1")) %>%
+  mutate(positive_rsv = ifelse(positive_rsv == 1, "Case", "Control")) %>%
+  mutate(positive_rsv = factor(positive_rsv, levels = c("Control", "Case"))) %>%
+  ggplot() +
+  geom_histogram(aes(x = collection_date, fill = factor(positive_rsv)), color = "black") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + theme_classic() +
+  xlab("Time of sample collection for RSV test") +
+  ylab("Number of RSV test records")  +
+  labs(fill = "Case status") +
+  scale_fill_brewer(palette = "Set2") +
+  geom_vline(xintercept = as.Date("2023-10-1"), linetype = "dashed")  +
+  geom_text(aes(x = as.Date("2023-10-5"), y = 140, label = "Nirsevimab administration started"), angle = 90, size = 3.5, fontface = "plain", check_overlap = TRUE)
+
+
+plt.collection.date
+  
+if(savenewplot){
+  ggsave(plot = plt.collection.date, filename = "../figs_tabs/figures/plt.collection.date.pdf", height = 4, width = 8)
+}
+```
+
 
 <br>
 
@@ -62,18 +91,14 @@ tab.counter <- tab.counter + 1
 data.frame(
   anemia = nrow(df %>% filter(risk_factor_anemia == "yes")),
   blood = nrow(df %>% filter(risk_factor_blood == "yes")),
-  asthma = nrow(df %>% filter(risk_factor_asthma == "yes")),
-  liver_disease = nrow(df %>% filter(risk_factor_liver == "yes")),
   immunodeficiency = nrow(df %>% filter(risk_factor_immunodeficiency == "yes")),
   cardiac = nrow(df %>% filter(risk_factor_cardiac == "yes")),
   pulmonary_disease = nrow(df %>% filter(risk_factor_pulmonary == "yes")),
   down_syndrome = nrow(df %>% filter(risk_factor_down == "yes")),
-  wheezing = nrow(df %>% filter(risk_factor_wheezing == "yes")),
-  environmental = nrow(df %>% filter(risk_factor_environmental == "yes")),
   small_for_gestage = nrow(df %>% filter(risk_factor_small_for_gestage == 1)),
   gestage_lessthan37wks = nrow(df %>% filter(risk_factor_gestagelessthan37wks == 1))
 ) %>%
-  pivot_longer(cols = 1:12, names_to = "risk_factor", values_to = "n_records") %>%
+  pivot_longer(cols = 1:8, names_to = "risk_factor", values_to = "n_records") %>%
   arrange(desc(n_records)) %>%
   mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -93,9 +118,9 @@ df %>% count(risk_factor_atleastone) %>%
 
 
 # filter out those with at least one risk factor 
-a <- df %>% filter(risk_factor_atleastone == "yes") %>% 
-  dplyr::select(StudyID, collection_date, positive_rsv, rsv_mab,
-                starts_with("risk_factor"))
+# a <- df %>% filter(risk_factor_atleastone == "yes") %>% 
+#   dplyr::select(StudyID, collection_date, positive_rsv, rsv_mab,
+#                 starts_with("risk_factor"))
 
 # write csv for checking
 # write.csv(a, "../data/data_to_check/atleastoneriskfactor.csv", row.names = F)
@@ -141,7 +166,7 @@ df_table1 <- df %>%
                 race_ethnicity, 
                 birth_weight,
                 risk_factor_gestagelessthan37wks,
-                risk_factor_pulmonary, risk_factor_cardiac, risk_factor_asthma, risk_factor_anemia,
+                risk_factor_pulmonary, risk_factor_cardiac, risk_factor_anemia,
                 risk_factor_atleastone,  insurance_type, rsv_mab, 
                 encounter_type, 
                 symp_LRT_distress)
@@ -150,7 +175,7 @@ df_table1_infection <- df_table1 %>% dplyr::select(-encounter_type, -symp_LRT_di
 
 # footnotes 
 footnote_otherraces <- "Inclusing Asian, Pacific Islander, Middle Eastern or Northern American, American Indian or Native American by self-reporting."
-footnote_atleastoneriskfactor <- "Have at least one of the following conditions recorded in the infant's medical history or diagnosis records: 1) Anemia; 2) Asthma; 3) Liver diseases; 4) Immunodeficiency (e.g. transplantation history, leukemia, etc.); 5) Cardiac diseases (including congenital heart diseases diagnosed at birth or any reporting of heart conditions); 6) Pulmonary diseases; 7) Down syndrome; 8) Exposed to environmental exposures during gestation period or at young age (including chemical exposures: tobacco exposure, secondhand smoke etc., and socioeconomic factors: financial difficulties, unemployed parents, homelessness, etc.); 9) Small for gestational age (birth weight < 2,500 grams); 10) Prematurity (gestational age less than 37 weeks)."
+footnote_atleastoneriskfactor <- "Have at least one of the following conditions recorded in the infant's medical history or diagnosis records: 1) Anemia; 2) Immunodeficiency (e.g. transplantation history, leukemia, etc.); 3) Cardiac diseases (including congenital heart diseases diagnosed at birth or any reporting of heart conditions); 4) Pulmonary diseases; 5) Down syndrome; 6) Small for gestational age (birth weight < 2,500 grams); 7) Prematurity (gestational age less than 37 weeks)."
 
 
 table1_infection <- df_table1_infection %>% 
@@ -173,7 +198,6 @@ table1_infection <- df_table1_infection %>%
                 race_ethnicity ~ "Race and ethnicity",
                 risk_factor_pulmonary ~ "Pulmonary diseases", 
                 risk_factor_cardiac ~ "Cardiac diseases", 
-                risk_factor_asthma ~ "Asthma", 
                 risk_factor_anemia ~ "Anemia",
                 risk_factor_gestagelessthan37wks ~ "Gestational age",
                 risk_factor_atleastone ~ "Having at least one risk factor",
@@ -206,271 +230,13 @@ table1_infection <- df_table1_infection %>%
 table1_infection %>% as_flex_table() %>% 
   flextable::set_table_properties( width = 1, layout = "autofit") 
   
+if(savenewplot){
+  table1_infection %>%
+    as_gt() %>%
+    gt::gtsave(filename = "../figs_tabs/tables/table1_characteristics.docx")
+}
 ```
 
-
-#### RSV+ hospitalized vs. RSV+ (outpatient)
-  * this is to compare severe cases requiring hospitalization and mild cases
-```{r}
-tab.counter <- tab.counter + 1
-
-df_table1_severity <- df_table1 %>%
-  mutate(case_control = case_when(positive_rsv == "RSV+" & encounter_type == "inpatient" ~ "RSV+ hospitalizations",
-                                  positive_rsv == "RSV+" & encounter_type == "outpatient" ~ "RSV+ outpatients")) %>%
-  dplyr::select(-encounter_type, -positive_rsv, -symp_LRT_distress)
-  
-
-
-table1_severity <- df_table1_severity %>% 
-  tbl_summary(by = case_control,
-              
-              type = list(all_continuous() ~ "continuous2"),       # indicate that you want to print multiple statistics 
-         statistic = list(all_continuous() ~ c("{mean} ({sd})", 
-                                               "{median} ({p25}, {p75})",
-                                               "{N_miss} ({p_miss}%)"),                 
-                          all_categorical() ~ "{n} ({p}%)"),
-         
-              digits = list(all_categorical() ~ c(0, 1),
-                            all_continuous() ~ 1),
-         
-              label  = list(  
-                Sex ~ "Sex", 
-                age_at_test_in_months ~ "Age at testing (months)",
-                age_at_test_in_months_cat_2 ~ "Age at testing",
-                month_when_tested_cat ~ "Time tested", 
-                race_ethnicity ~ "Race and ethnicity",
-                risk_factor_pulmonary ~ "Pulmonary diseases", 
-                risk_factor_cardiac ~ "Cardiac diseases", 
-                risk_factor_asthma ~ "Asthma", 
-                risk_factor_anemia ~ "Anemia",
-                risk_factor_gestagelessthan37wks ~ "Gestational age",
-                risk_factor_atleastone ~ "Having at least one risk factor",
-                insurance_type ~ "Insurance type",
-                rsv_mab ~ "mAb status",
-                birth_weight ~ "Birth weight"
-                ),
-         
-        missing_text = "Missing"
-        #,
-         #     percent = "row"
-        #      missing= "no"
-                      ) %>% 
-  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
-  add_overall(last = F) %>%
-  bold_labels() %>%
-  modify_table_styling(
-    columns = label,
-    rows = label == "Other non-Hispanic",
-    footnote = footnote_otherraces
-  ) %>%
-   modify_table_styling(
-    columns = label,
-    rows = label == "Having at least one risk factor",
-    footnote = footnote_atleastoneriskfactor
-  )
-
-
-table1_severity %>% as_flex_table() %>% 
-  flextable::set_table_properties( width = 1, layout = "autofit") 
-  
-```
-
-#### RSV+ hospitalized vs. RSV- (all)
-  * this is to compare severe cases requiring hospitalization and all RSV- 
-```{r}
-tab.counter <- tab.counter + 1
-
-df_table1_severity_2 <- df_table1 %>%
-  mutate(case_control = case_when(positive_rsv == "RSV+" & encounter_type == "inpatient" ~ "RSV+ hospitalizations",
-                                  positive_rsv == "RSV-" ~ "RSV-")) %>%
-  dplyr::select(-encounter_type, -positive_rsv, -symp_LRT_distress)
-  
-
-
-table1_severity_2 <- df_table1_severity_2 %>% 
-  tbl_summary(by = case_control,
-              
-              type = list(all_continuous() ~ "continuous2"),       # indicate that you want to print multiple statistics 
-         statistic = list(all_continuous() ~ c("{mean} ({sd})", 
-                                               "{median} ({p25}, {p75})",
-                                               "{N_miss} ({p_miss}%)"),                 
-                          all_categorical() ~ "{n} ({p}%)"),
-         
-              digits = list(all_categorical() ~ c(0, 1),
-                            all_continuous() ~ 1),
-         
-              label  = list(  
-                Sex ~ "Sex", 
-                age_at_test_in_months ~ "Age at testing (months)",
-                age_at_test_in_months_cat_2 ~ "Age at testing",
-                month_when_tested_cat ~ "Time tested", 
-                race_ethnicity ~ "Race and ethnicity",
-                risk_factor_pulmonary ~ "Pulmonary diseases", 
-                risk_factor_cardiac ~ "Cardiac diseases", 
-                risk_factor_asthma ~ "Asthma", 
-                risk_factor_anemia ~ "Anemia",
-                risk_factor_gestagelessthan37wks ~ "Gestational age",
-                risk_factor_atleastone ~ "Having at least one risk factor",
-                insurance_type ~ "Insurance type",
-                rsv_mab ~ "mAb status",
-                birth_weight ~ "Birth weight"
-                ),
-         
-        missing_text = "Missing"
-        #,
-         #     percent = "row"
-        #      missing= "no"
-                      ) %>% 
-  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
-  add_overall(last = F) %>%
-  bold_labels() %>%
-  modify_table_styling(
-    columns = label,
-    rows = label == "Other non-Hispanic",
-    footnote = footnote_otherraces
-  ) %>%
-   modify_table_styling(
-    columns = label,
-    rows = label == "Having at least one risk factor",
-    footnote = footnote_atleastoneriskfactor
-  )
-
-
-table1_severity_2 %>% as_flex_table() %>% 
-  flextable::set_table_properties( width = 1, layout = "autofit") 
-  
-```
-
-#### Inpatient vs. outpatient
-  * this is to compare inpatient and outpatient records
-```{r}
-tab.counter <- tab.counter + 1
-
-df_table1_encounter <- df_table1 %>%
-  mutate(case_control = case_when(encounter_type == "inpatient" ~ "Inpatient",
-                                  encounter_type == "outpatient" ~ "Outpatient")) %>%
-  dplyr::select(-encounter_type, -symp_LRT_distress)
-
-
-
-table1_encounter <- df_table1_encounter %>% 
-  tbl_summary(by = case_control,
-              
-              type = list(all_continuous() ~ "continuous2"),       # indicate that you want to print multiple statistics 
-         statistic = list(all_continuous() ~ c("{mean} ({sd})", 
-                                               "{median} ({p25}, {p75})",
-                                               "{N_miss} ({p_miss}%)"),                 
-                          all_categorical() ~ "{n} ({p}%)"),
-         
-              digits = list(all_categorical() ~ c(0, 1),
-                            all_continuous() ~ 1),
-         
-              label  = list(  
-                Sex ~ "Sex", 
-                age_at_test_in_months ~ "Age at testing (months)",
-                age_at_test_in_months_cat_2 ~ "Age at testing",
-                month_when_tested_cat ~ "Time tested", 
-                race_ethnicity ~ "Race and ethnicity",
-                risk_factor_pulmonary ~ "Pulmonary diseases", 
-                risk_factor_cardiac ~ "Cardiac diseases", 
-                risk_factor_asthma ~ "Asthma", 
-                risk_factor_anemia ~ "Anemia",
-                risk_factor_gestagelessthan37wks ~ "Gestational age",
-                risk_factor_atleastone ~ "Having at least one risk factor",
-                insurance_type ~ "Insurance type",
-                rsv_mab ~ "mAb status",
-                birth_weight ~ "Birth weight"
-                ),
-         
-        missing_text = "Missing"
-        #,
-         #     percent = "row"
-        #      missing= "no"
-                      ) %>% 
-  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
-  add_overall(last = F) %>%
-  bold_labels() %>%
-  modify_table_styling(
-    columns = label,
-    rows = label == "Other non-Hispanic",
-    footnote = footnote_otherraces
-  ) %>%
-   modify_table_styling(
-    columns = label,
-    rows = label == "Having at least one risk factor",
-    footnote = footnote_atleastoneriskfactor
-  )
-
-
-table1_encounter %>% as_flex_table() %>% 
-  flextable::set_table_properties( width = 1, layout = "autofit") 
-  
-```
-#### LRTI vs. no LRTI
-  * this is to compare those with symptoms of LRTI and those without LRTI symptoms
-```{r}
-tab.counter <- tab.counter + 1
-
-df_table1_LRTI <- df_table1 %>%
-  mutate(case_control = case_when(symp_LRT_distress == 1 ~ "LRTI",
-                                  TRUE ~ "no LRTI")) %>%
-  dplyr::select(-encounter_type, -symp_LRT_distress)
-
-
-
-table1_LRTI <- df_table1_LRTI %>% 
-  tbl_summary(by = case_control,
-              
-              type = list(all_continuous() ~ "continuous2"),       # indicate that you want to print multiple statistics 
-         statistic = list(all_continuous() ~ c("{mean} ({sd})", 
-                                               "{median} ({p25}, {p75})",
-                                               "{N_miss} ({p_miss}%)"),                 
-                          all_categorical() ~ "{n} ({p}%)"),
-         
-              digits = list(all_categorical() ~ c(0, 1),
-                            all_continuous() ~ 1),
-         
-              label  = list(  
-                Sex ~ "Sex", 
-                age_at_test_in_months ~ "Age at testing (months)",
-                age_at_test_in_months_cat_2 ~ "Age at testing",
-                month_when_tested_cat ~ "Time tested", 
-                race_ethnicity ~ "Race and ethnicity",
-                risk_factor_pulmonary ~ "Pulmonary diseases", 
-                risk_factor_cardiac ~ "Cardiac diseases", 
-                risk_factor_asthma ~ "Asthma", 
-                risk_factor_anemia ~ "Anemia",
-                risk_factor_gestagelessthan37wks ~ "Gestational age",
-                risk_factor_atleastone ~ "Having at least one risk factor",
-                insurance_type ~ "Insurance type",
-                rsv_mab ~ "mAb status",
-                birth_weight ~ "Birth weight"
-                ),
-         
-        missing_text = "Missing"
-        #,
-         #     percent = "row"
-        #      missing= "no"
-                      ) %>% 
-  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
-  add_overall(last = F) %>%
-  bold_labels() %>%
-  modify_table_styling(
-    columns = label,
-    rows = label == "Other non-Hispanic",
-    footnote = footnote_otherraces
-  ) %>%
-   modify_table_styling(
-    columns = label,
-    rows = label == "Having at least one risk factor",
-    footnote = footnote_atleastoneriskfactor
-  )
-
-
-table1_LRTI %>% as_flex_table() %>% 
-  flextable::set_table_properties( width = 1, layout = "autofit") 
-  
-```
 
 
 <br>
@@ -537,7 +303,7 @@ table1_outcome <- df_table1_outcome %>%
          #     percent = "row"
         #      missing= "no"
                       ) %>% 
-  #add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
+  add_p(pvalue_fun = ~ style_pvalue(., digits = 3)) %>% 
   add_overall(last = F) %>%
   bold_labels() %>%
   modify_table_styling(
@@ -555,6 +321,11 @@ table1_outcome <- df_table1_outcome %>%
 table1_outcome %>% as_flex_table() %>% 
   flextable::set_table_properties( width = 1, layout = "autofit") 
 
+if(savenewplot){
+  table1_outcome %>%
+    as_gt() %>%
+    gt::gtsave(filename = "../figs_tabs/tables/table2_clinical_outcomes.docx")
+}
 ```
 
 <br>
@@ -566,294 +337,395 @@ table1_outcome %>% as_flex_table() %>%
 confounders_infection <- c(
   "age_at_test_in_months_cat_2", # 3-month interval
   "month_when_tested_cat", 
-  "birth_weight"
+  "birth_weight",
+  "risk_factor_gestagelessthan37wks"
 )
 
-# For VE against severity
-# only adjusting for those that has significant difference comparing RSV+ hospitalization and RSV+ outpatient
-confounders_severity <- c(
-  "age_at_test_in_months_cat_2", # 3-month interval
-  "month_when_tested_cat",
-  "risk_factor_pulmonary",
-  "risk_factor_asthma"
-)
-
-# For VE against severity (2)
-# only adjusting for those that has significant difference comparing RSV+ hospitalization and RSV-
-confounders_severity_2 <- c(
+confounders_infection_wane <- c(
   "age_at_test_in_months_cat_2", # 3-month interval
   "month_when_tested_cat"
-)
-
-# For VE against hospitalization
-# only adjusting for those that has significant difference comparing inpatient and outpatient
-confounders_encounter <- c(
-  "age_at_test_in_months_cat_2", # 3-month interval
-  "month_when_tested_cat",
-  "risk_factor_gestagelessthan37wks",
-  "risk_factor_pulmonary",
-  "risk_factor_cardiac",
-  "risk_factor_asthma",
-  "risk_factor_anemia",
-  "risk_factor_atleastone"
-  
-)
-
-
-confounders_LRTI <- c(
-  "Sex",
-  "age_at_test_in_months_cat_2", # 3-month interval
-  "month_when_tested_cat",
-  "race_ethnicity",
-  "birth_weight",
-  "risk_factor_gestagelessthan37wks",
-  "risk_factor_pulmonary",
-  "risk_factor_cardiac",
-  "risk_factor_asthma",
-  "risk_factor_anemia",
-  "risk_factor_atleastone"
 )
 ```
 
 <br>
+
+```{r}
+# recode symp_LRT_distress to have 1 and 0 (previously 1 and NA, will create some issue when counting records in analysis)
+df <- df %>%
+  mutate(symp_LRT_distress = ifelse(is.na(symp_LRT_distress), 0, 1))
+```
+
 
 ### Table `r tab.counter`. Effectiveness of Nirsevimab {.tabset}
 ##### Here, I pooled all the cases and controls together, to estimate the VE for different pairs of case and control definitions.
   * Columns n_overall, n_cases, n_controls are numbers of individuals were sample size used in the analysis. 
     + The sample size outside the parenthesis is the sample size that contributes to estimates of **unadjusted** effectiveness in the logistic regression models.
     + The sample size inside the parenthesis is the sample size that effectively contributes to estimates of **adjusted** effectiveness in the logistic regression models.
-
-#### Table `r tab.counter`.
-
-```{r warning=FALSE}
+    + look at nirsevimab's effectiveness against: 
+      + RSV infection 
+      + RSV-associated ED visit (outpatient)
+      + RSV-associated hospitalizations
+      + RSV-associated LRTI
+      + RSV-associated LRTI hospitalizations
+      + RSV-associated ICU admissions
+      + RSV-associated severe disease
+     
+#### Table `r tab.counter`. 
+```{r warning=F}
 tab.counter <- tab.counter + 1
-
-###################################
-# inpatient RSV+ vs. inpatient RSV-
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 ~ 1,
-                                  encounter_type == "inpatient" & positive_rsv == 0 ~ 0))
+##########################
+# Against RSV infection (inpatient + outpatient)
+##########################
+df.ve <- df %>% mutate(case_control = positive_rsv)
 
 ve.1 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (inpatient)", control = "RSV- (inpatient)")
+ mutate(against = "RSV infection")
 
 
-###################################
-# outpatient RSV+ vs. outpatient RSV-
-###################################
+##########################
+# Against RSV hospitalizations
+##########################
 df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "outpatient" & positive_rsv == 1 ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 0 ~ 0))
+  filter(encounter_type == "inpatient") %>% mutate(case_control = positive_rsv)
 
 ve.2 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (outpatient)", control = "RSV- (outpatient)")
+ mutate(against = "RSV-associated hospitalization")
 
 
-###################################
-# all RSV+ vs. all RSV-
-###################################
+##########################
+# Against RSV ED visit
+##########################
+# remove those "Specimen"? 
 df.ve <- df %>% 
-  mutate(case_control = case_when(positive_rsv == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(encounter_type == "outpatient") %>% mutate(case_control = positive_rsv)
 
 ve.3 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (all)", control = "RSV- (all)")
+ mutate(against = "RSV-associated outpatient visit")
 
-
-
-###################################
-# RSV+ hospitalized vs. all RSV- 
-###################################
+##########################
+# Against RSV-associated LRTI
+##########################
 df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(symp_LRT_distress == 1) %>% mutate(case_control = positive_rsv)
 
-ve.4 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ hospitalizations", control = "RSV- (all)")
+ve.4 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated LRTI")
 
 
-###################################
-# severe RSV+ hospitalized vs. all RSV- 
-###################################
+##########################
+# Against RSV-associated LRTI hospitalization
+##########################
 df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(symp_LRT_distress == 1 & encounter_type == "inpatient") %>% 
+  mutate(case_control = positive_rsv)
 
-ve.5 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ hospitalizations", control = "RSV- (all)")
+ve.5 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated LRTI hospitalization")
 
-###################################
-# RSV+ icu vs. all RSV- 
-###################################
+
+
+
+##########################
+# Against RSV-associated severe disease outcomes
+##########################
+# severe disease outcome includes: ICU admissions or high flow rate oxygen support
 df.ve <- df %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(icu_admitted == "yes" | highflow_oxygen == 1) %>% 
+  mutate(case_control = positive_rsv)
 
-ve.6 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ ICU admission", control = "RSV- (all)")
-
-
-###################################
-# RSV+ LRT-hospitalizations vs. all RSV- 
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    ( symp_LRT_distress == 1 ) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.7 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ LRTI hospitalizations", control = "RSV- (all)")
+ve.6 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated severe outcomes")
 
 
-###################################
-# severe RSV+ LRT-hospitalizations vs. all RSV- 
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    ( symp_LRT_distress == 1 ) &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.8 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ LRTI hospitalizations", control = "RSV- (all)")
-
-
-###################################
-# RSV+ LRTI vs. RSV- 
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1  ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.9 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ LRTI", control = "RSV- (all)")
-
-
-###################################
-# severe RSV LRTI vs. RSV-
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.10 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ LRTI", control = "RSV- (all)")
-
-
-
-
-###################################
-# all-cause hospitalizations vs. outpatient  
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient"  ~ 1,
-                                  encounter_type == "outpatient" ~ 0))
-
-ve.11 <- regress_unmatch(df.ve = df.ve, confounders = confounders_encounter) %>% 
- mutate(case = "all-cause hospitalizations", control = "not hospitalized")
-
-###################################
-# LRT-hospitalizations vs. outpatient  
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & symp_LRT_distress == 1  ~ 1,
-                                  encounter_type == "outpatient" ~ 0))
-
-ve.12 <- regress_unmatch(df.ve = df.ve, confounders = confounders_encounter) %>% 
- mutate(case = "LRTI hospitalizations", control = "not hospitalized")
-
-
-###################################
-# LRTI vs. no LRTI 
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(symp_LRT_distress == 1  ~ 1,
-                                  TRUE ~ 0))
-
-ve.13 <- regress_unmatch(df.ve = df.ve, confounders = confounders_LRTI) %>% 
- mutate(case = "LRTI", control = "no LRTI")
-
-
-###################################
-# RSV+ hospitalization vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1  ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.14 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "RSV+ hospitalizations", control = "RSV+ outpatient")
-
-
-###################################
-# severe RSV+ hospitalization vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) == 1  ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.15 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "severe RSV+ hospitalizations", control = "RSV+ outpatient")
-
-
-###################################
-# RSV+ LRTI vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.16 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "RSV+ LRTI", control = "RSV+ outpatient")
-
-
-
-###################################
-# severe RSV+ LRTI vs. RSV+ outpatient
-###################################
-df.ve <- df %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 1 & encounter_type == "outpatient" ~ 0))
-
-ve.17 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "severe RSV+ LRTI", control = "RSV+ outpatient")
-
-
-
-
+## combine the results 
 # combine the tables together 
 ve <- 
   rbind(
-  ve.1, ve.2, ve.3, ve.4, ve.5,
-  ve.6, ve.7, ve.8, ve.9, ve.10,
-  ve.11, ve.12, ve.13, ve.14, ve.15,
-  ve.16, ve.17
+  ve.1, ve.2, ve.3, ve.4, ve.5, ve.6
 ) %>% 
-  dplyr::select(case, control, n_cases_mab, n_cases_nomab, n_controls_mab, n_controls_nomab, ve_unadj, ve_adj) 
+  dplyr::select(against, n_cases_mab, n_cases_nomab, n_controls_mab, n_controls_nomab, ve_unadj, ve_adj) 
 
 ve %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
-            defaultExpanded = T, defaultPageSize = 20) 
+            defaultExpanded = T, defaultPageSize = 20)
 
 ```
 
-#### Figure `r fig.counter`.
-```{r, fig.width = 13, fig.height= 6}
+#### Figure `r fig.counter`. (with n_records)
+```{r, fig.width = 12, fig.height= 5}
 fig.counter <- fig.counter + 1
 
 source("utils_mAb_VE.R")
 
-ve_forest()
+ve_forest_withn()
+```
+
+
+#### Figure `r fig.counter`. (2 rows for each outcome)
+```{r, fig.width = 12, fig.height= 6}
+fig.counter <- fig.counter + 1
+
+source("utils_mAb_VE.R")
+
+ve_forest_2rows()
 ```
 
 <br>
 
 ### Look at how VE of mAb changes over time {.tabset}
+
+#### Table `r tab.counter`  1 month interval
+Why the unadjusted and adjusted are reversed? 
+```{r warning=F}
+tab.counter <- tab.counter + 1
+
+####################
+# against RSV infection (inpatient + outpatient)
+####################
+
+df.wane <- df %>% mutate(case_control = positive_rsv) 
+
+# unadjusted
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_3, data = df.wane, family = "binomial")
+
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:6])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:6])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:6])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_3 + ", 
+                             paste(confounders_infection_wane, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:6])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:6])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:6])
+
+
+
+n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+
+ve.wane.1m.infection <- 
+  data.frame(
+  against = rep("Infection", 6),
+  strata = c("not immunized", "immunized 0-1 months ago", "immunied 1-2 months ago", "immunized 2-3 months ago", "immunized 3-4 months ago",  "immunized 4 months + ago"),
+  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
+  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
+  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
+  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
+)
+
+####################
+# against RSV-associated hospitalization
+####################
+
+df.wane <- df %>% filter(encounter_type == "inpatient") %>%
+  mutate(case_control = positive_rsv) 
+
+# unadjusted
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_3, data = df.wane, family = "binomial")
+
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:6])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:6])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:6])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_3 + ", 
+                             paste(confounders_infection_wane, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:6])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:6])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:6])
+
+
+
+n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+
+ve.wane.1m.RSVhosp <- 
+  data.frame(
+  against = rep("RSV-associated hospitalization", 5),
+  strata = c("not immunized", "immunized 0-1 months ago", "immunied 1-2 months ago",  "immunized 3-4 months ago",  "immunized 4 months + ago"),
+  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
+  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")")[c(1,2,3,5,6)],
+  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")[c(1,2,4,5)]),
+  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")[c(1,2,4,5)])
+)
+
+
+####################
+# against RSV-associated outpatient visit 
+####################
+
+df.wane <- df %>% filter(encounter_type == "outpatient") %>%
+  mutate(case_control = positive_rsv) 
+
+# unadjusted
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_3, data = df.wane, family = "binomial")
+
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:6])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:6])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:6])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_3 + ", 
+                             paste(confounders_infection_wane, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:6])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:6])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:6])
+
+
+
+n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+
+ve.wane.1m.RSVoutpatient <- 
+  data.frame(
+  against = rep("RSV-associated outpatient visit", 5),
+  strata = c("not immunized", "immunized 0-1 months ago", "immunied 1-2 months ago", "immunied 2-3 months ago",  "immunized 3-4 months ago"),
+  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
+  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")")[c(1,2,3,4,5)],
+  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")[c(1,2,3,4)]),
+  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")[c(1,2,3,4)])
+)
+
+
+
+
+####################
+# against RSV-associated LRTI
+####################
+
+df.wane <- df %>% filter(symp_LRT_distress == 1) %>%
+  mutate(case_control = positive_rsv) 
+
+# unadjusted
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_3, data = df.wane, family = "binomial")
+
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:6])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:6])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:6])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_3 + ", 
+                             paste(confounders_infection_wane, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:6])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:6])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:6])
+
+
+
+n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+
+ve.wane.1m.RSVLRTI <- 
+  data.frame(
+  against = rep("RSV-associated LRTI", 6),
+  strata = c("not immunized", "immunized 0-1 months ago", "immunied 1-2 months ago","immunied 2-3 months ago",  "immunized 3-4 months ago",  "immunized 4 months + ago"),
+  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
+  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
+  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
+  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
+)
+
+
+
+####################
+# against RSV-associated severe outcomes
+####################
+
+df.wane <- df %>% filter(icu_admitted == 1 | highflow_oxygen == 1) %>%
+  mutate(case_control = positive_rsv) 
+
+# unadjusted
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_3, data = df.wane, family = "binomial")
+
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:6])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:6])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:6])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_3 + ", 
+                             paste(confounders_infection_wane, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:6])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:6])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:6])
+
+
+
+n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3")] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_3)
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_3", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_3)
+
+
+ve.wane.1m.RSVsevere <- 
+  data.frame(
+  against = rep("RSV-associated severe outcomes", 5),
+  strata = c("not immunized", "immunized 0-1 months ago", "immunied 1-2 months ago", "immunized 3-4 months ago",  "immunized 4 months + ago"),
+  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
+  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")")[c(1,2,3,5,6)],
+  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")[c(1,2,4,5)]),
+  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")[c(1,2,4,5)])
+)
+
+
+
+ve.wane.1m.infection%>%
+  rbind(ve.wane.1m.RSVhosp) %>%
+  rbind(ve.wane.1m.RSVoutpatient) %>%
+  rbind(ve.wane.1m.RSVLRTI) %>%
+  rbind(ve.wane.1m.RSVsevere) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
+            defaultExpanded = T, defaultPageSize = 20, groupBy = "against")
+
+```
+
 
 #### Table `r tab.counter`  2 months interval
 Why the unadjusted and adjusted are reversed? 
@@ -861,7 +733,7 @@ Why the unadjusted and adjusted are reversed?
 tab.counter <- tab.counter + 1
 
 ####################
-# all RSV+ vs. all RSV-
+# against RSV infection 
 ####################
 
 df.wane <- df %>% mutate(case_control = positive_rsv) 
@@ -876,7 +748,7 @@ ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
 
 # adjusted 
 formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
-                             paste(confounders_infection, collapse = " + ")))
+                             paste(confounders_infection_wane, collapse = " + ")))
 model.adj <- glm(formula, data = df.wane, family = "binomial")
 ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
 ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
@@ -889,16 +761,16 @@ n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
 n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection)] %>%
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection)] %>%
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
 
 ve.wane.2m.infection <- 
   data.frame(
-  case_control = rep("RSV+ vs. RSV-", 4),
-  strata = c("not immunized", "immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  against = rep("RSV infection", 4),
+  strata = c("not immunized", "immunized 0-2 months ago", "immunized 2-4 months ago", "immunized 4 months + ago"),
   n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
   n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
   VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
@@ -908,11 +780,60 @@ ve.wane.2m.infection <-
 
 
 ########################################
-# RSV+ hospitalizations vs. all RSV- 
+# against RSV-associated hospitalization
 ########################################
 
-df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
-                                                  positive_rsv == 0 ~ 0)) 
+df.wane <- df %>% filter(encounter_type == "inpatient") %>%
+  mutate(case_control = positive_rsv)
+
+
+# unadjusted
+model.unadj <- glm(case_control ~ days_btw_mab_collection_cat, data = df.wane, family = "binomial")
+
+
+ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:4])
+ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:4])
+ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
+
+# adjusted 
+formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
+                             paste(confounders_infection_wane, collapse = " + ")))
+model.adj <- glm(formula, data = df.wane, family = "binomial")
+ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
+ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
+ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:4])
+
+
+
+n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
+  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
+
+
+ve.wane.2m.RSVhosp <- 
+  data.frame(
+  against = rep("RSV-associated hospitalization", 4),
+  strata = c("not immunized", "immunized 0-2 months ago", "immunized 2-4 months ago", "immunized 4 months + ago"),
+  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
+  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
+  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
+  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
+)
+
+
+########################################
+# againt RSV-associated outpatient visit
+########################################
+
+df.wane <- df %>% 
+  filter(encounter_type == "outpatient") %>% 
+  mutate(case_control = positive_rsv)
 
 
 
@@ -926,7 +847,7 @@ ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
 
 # adjusted 
 formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
-                             paste(confounders_severity_2, collapse = " + ")))
+                             paste(confounders_infection_wane, collapse = " + ")))
 model.adj <- glm(formula, data = df.wane, family = "binomial")
 ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
 ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
@@ -939,29 +860,30 @@ n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
 n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_severity_2)] %>%
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_severity_2)] %>%
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
 
-ve.wane.2m.severity <- 
+ve.wane.2m.RSVoutpatient <- 
   data.frame(
-  case_control = rep("RSV+ hospitalization vs. RSV-", 4),
-  strata = c("not immunized", "immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  against = rep("RSV-associated outpatient visit", 3),
+  strata = c("not immunized", "immunized 0-2 months ago", "immunized 2-4 months ago"),
   n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
-  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
-  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
-  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
+  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")")[c(1,2,3)],
+  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")[c(1,2)]),
+  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")[c(1,2)])
 )
 
 
 ########################################
-# RSV+ LRTI vs. RSV-
+# againt RSV-associated LRTI
 ########################################
 
-df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
-                                                  positive_rsv == 0 ~ 0)) 
+df.wane <- df %>% 
+  filter(symp_LRT_distress == 1) %>% 
+  mutate(case_control = positive_rsv)
 
 
 
@@ -975,7 +897,7 @@ ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
 
 # adjusted 
 formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
-                             paste(confounders_severity_2, collapse = " + ")))
+                             paste(confounders_infection_wane, collapse = " + ")))
 model.adj <- glm(formula, data = df.wane, family = "binomial")
 ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
 ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
@@ -988,16 +910,16 @@ n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
 n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_severity_2)] %>%
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_severity_2)] %>%
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
 
-ve.wane.2m.LRTI <- 
+ve.wane.2m.RSVLRTI <- 
   data.frame(
-  case_control = rep("RSV+ LRTI vs. RSV-", 4),
-  strata = c("not immunized", "immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  against = rep("RSV-associated LRTI", 4),
+  strata = c("not immunized", "immunized 0-2 months ago", "immunized 2-4 months ago",  "immunized 4 months + ago"),
   n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
   n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
   VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
@@ -1007,12 +929,12 @@ ve.wane.2m.LRTI <-
 
 
 ########################################
-# RSV+ LRTI hosp vs. RSV-
+# againt RSV-associated severe outcomes
 ########################################
 
-df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 & 
-                                                    encounter_type == "inpatient" ~ 1,
-                                                  positive_rsv == 0 ~ 0)) 
+df.wane <- df %>% 
+  filter(icu_admitted == 1 | highflow_oxygen == 1) %>% 
+  mutate(case_control = positive_rsv)
 
 
 
@@ -1026,7 +948,7 @@ ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:4])
 
 # adjusted 
 formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat + ", 
-                             paste(confounders_severity_2, collapse = " + ")))
+                             paste(confounders_infection_wane, collapse = " + ")))
 model.adj <- glm(formula, data = df.wane, family = "binomial")
 ve.median.adj <- 1 - exp(model.adj$coefficients[2:4])
 ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:4])
@@ -1039,228 +961,139 @@ n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
 n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat")] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_severity_2)] %>%
+n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_severity_2)] %>%
+n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat", confounders_infection_wane)] %>%
   drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat)
 
 
-ve.wane.2m.LRTIhosp <- 
+ve.wane.2m.RSVsevere <- 
   data.frame(
-  case_control = rep("RSV+ LRTI hospitalizations vs. RSV-", 4),
-  strata = c("not immunized", "immunized 0-2 months ago", "immuniaed 2-4 months ago", "immunized 4 months + ago"),
+  against = rep("RSV-associated severe outcomes", 4),
+  strata = c("not immunized", "immunized 0-2 months ago", "immunized 2-4 months ago",  "immunized 4 months + ago"),
   n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
   n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
   VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
   VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
 )
 
+ve.wane.2m <- 
+  ve.wane.2m.infection%>%
+  rbind(ve.wane.2m.RSVhosp) %>%
+  rbind(ve.wane.2m.RSVoutpatient) %>%
+  rbind(ve.wane.2m.RSVLRTI) %>%
+  rbind(ve.wane.2m.RSVsevere)
 
-
-
-rbind(ve.wane.2m.infection, ve.wane.2m.severity, ve.wane.2m.LRTI, ve.wane.2m.LRTIhosp) %>%
+ve.wane.2m %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
-            defaultExpanded = T, defaultPageSize = 20, groupBy = "case_control") 
+            defaultExpanded = T, defaultPageSize = 20, groupBy = "against")
+
+if(savenewplot){
+  tab.wane.2m <- 
+    ve.wane.2m %>% 
+    mutate(n.cases = str_replace(n.cases, " \\s*\\([^\\)]+\\)", "")) %>%
+    mutate(n.controls = str_replace(n.controls, " \\s*\\([^\\)]+\\)", "")) %>%
+    mutate(strata = case_when(strata == "not immunized" ~ "Unvaccinated",
+                              strata == "immunized 0-2 months ago" ~ "0-2 months",
+                              strata == "immunized 2-4 months ago" ~ "3-4 months",
+                              strata == "immunized 4 months + ago" ~ "> 4 months")) %>%
+    flextable() %>%
+    set_header_labels(against = "Outcome prevented", 
+                      strata = "Time since vaccination",
+                      n.cases = "RSV positive",
+                      n.controls = "RSV negative",
+                      VE.unadjusted = "Unadjusted VE (95%CI)",
+                      VE.adjusted = "Adjusted VE (95%CI)") %>%
+    merge_at(i = 1:4, j = 1) %>% 
+    merge_at(i = 5:8, j = 1) %>% 
+    merge_at(i = 9:11, j = 1) %>% 
+    merge_at(i = 12:15, j = 1) %>% 
+    merge_at(i = 16:19, j = 1) %>% 
+    width(j = 1:2, width = 1) %>%
+    vline() %>%
+    hline(i = c(4, 8, 11, 15, 19))
+  
+  save_as_docx(tab.wane.2m, path = "../figs_tabs/tables/table.wane.2m.docx")
+}
+  
 ```
 
 
-#### Table `r tab.counter`  3 months interval
-```{r warning=F}
-tab.counter <- tab.counter + 1
+#### Figure `r fig.counter`. Visualize the waning (2 month interval)
+```{r, fig.width = 8, fig.height =4}
+fig.counter <- fig.counter + 1
 
-####################
-# all RSV+ vs. all RSV- 
-####################
+# format the data a bit 
+df.plt.wane.2m <- 
+  ve.wane.2m %>% 
+  filter(strata != "not immunized") %>%
+  mutate(strata = case_when(strata == "immunized 0-2 months ago" ~ "vaccinated 0-2 months ago",
+                            strata == "immunized 2-4 months ago" ~ "vaccinated 3-4 months ago",
+                            strata == "immunized 4 months + ago" ~ "vaccinated 4+ months ago")) %>%
+  mutate(time_since_vax = case_when(strata == "vaccinated 0-2 months ago" ~ "0-2 months",
+                                    strata == "vaccinated 3-4 months ago" ~ "3-4 months",
+                                    strata == "vaccinated 4+ months ago" ~ "after 4 months")) %>% 
+   dplyr::select(-c(n.cases, n.controls, VE.unadjusted)) %>%
+  break_ve() %>%
+  filter(against != "RSV-associated outpatient visit") %>%
+  mutate(against = factor(against, levels = c("RSV infection", "RSV-associated LRTI", "RSV-associated hospitalization", "RSV-associated severe outcomes")))
 
-df.wane <- df %>% mutate(case_control = positive_rsv) 
+df.no.arrow <- 
+  df.plt.wane.2m %>%
+  mutate(add_arrow = ifelse(ve_adj_lb < -20, 1, 0)) %>%
+  mutate(ve_adj_lb = ifelse(add_arrow == 1, -20, ve_adj_lb)) %>% 
+  mutate(across(starts_with("ve_adj_"), ~ ifelse(add_arrow == 1, NA, .)))
 
-# unadjusted
-model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_2, data = df.wane, family = "binomial")
+df.add.arrow <- 
+  df.plt.wane.2m %>%
+  mutate(add_arrow = ifelse(ve_adj_lb < -20, 1, 0)) %>%
+  mutate(ve_adj_lb = ifelse(add_arrow == 1, -20, ve_adj_lb)) %>% 
+  mutate(across(starts_with("ve_adj_"), ~ ifelse(add_arrow != 1, NA, .))) 
 
-
-ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:3])
-ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:3])
-ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:3])
-
-# adjusted 
-formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_2 + ", 
-                             paste(confounders_infection, collapse = " + ")))
-model.adj <- glm(formula, data = df.wane, family = "binomial")
-ve.median.adj <- 1 - exp(model.adj$coefficients[2:3])
-ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:3])
-ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:3])
-
-
-
-n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_infection)] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_infection)] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-
-ve.wane.3m.infection <- 
-  data.frame(
-  case_control = rep("RSV+ vs. RSV-", 3),
-  strata = c("not immunized", "immunized 0-3 months ago", "immuniaed 3-6 months ago"),
-  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
-  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
-  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
-  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
-)
+# adjusted arrows to parallel
+# https://stackoverflow.com/questions/67853990/geom-segment-parallel-dodging
+space_between_bars <- 0.145
+df.add.arrow$against_x_adj = scale(as.numeric(as.factor(df.add.arrow$against))) * space_between_bars
+df.add.arrow$x = as.numeric(as.factor(df.add.arrow$time_since_vax)) + df.add.arrow$against_x_adj
 
 
+plt.wane.2m <- 
+  ggplot() +
+  # if lb > -20
+  geom_point(aes(x = time_since_vax, y = ve_adj_median, color = against), 
+             position = position_dodge(0.5), data = df.no.arrow) +
+  geom_errorbar(aes(x = time_since_vax, ymin = ve_adj_lb, ymax = ve_adj_ub, color = against), 
+                width = 0, position = position_dodge(0.5), data = df.no.arrow) +
+  geom_text(aes(x = time_since_vax, y = ve_adj_median, color = against, label = VE.adjusted), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 2.5, data = df.no.arrow) +
+  # if lb < -20
+  geom_point(aes(x = time_since_vax, y = ve_adj_median, color = against), 
+             position = position_dodge(0.5), data = df.add.arrow) +
+  geom_segment(aes(x = x, xend = x, 
+                   y = ve_adj_ub, yend = ve_adj_lb, color = against),
+               arrow = arrow(length = unit(2, "mm")),
+               position = position_dodge(0.5),
+               data = df.add.arrow, show_guide = F) +
+  geom_text(aes(x = time_since_vax, y = (ve_adj_ub+50)/2, color = against, label = VE.adjusted), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 2.5, data = df.add.arrow) +
+  theme_classic() +
+  scale_color_brewer(palette = "Set1") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Effectiveness of nirsevimab (%)") +
+  xlab("Time since vaccination") +
+  labs(color = "Clinical outcome prevented") +
+  ylim(c(-25, 100))
 
-########################################
-# RSV+ hospitalizations vs. all RSV- 
-########################################
+plt.wane.2m
 
-df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" ~ 1,
-                                                  positive_rsv == 0 ~ 0)) 
-
-
-
-# unadjusted
-model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_2, data = df.wane, family = "binomial")
-
-
-ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:3])
-ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:3])
-ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:3])
-
-# adjusted 
-formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_2 + ", 
-                             paste(confounders_severity_2, collapse = " + ")))
-model.adj <- glm(formula, data = df.wane, family = "binomial")
-ve.median.adj <- 1 - exp(model.adj$coefficients[2:3])
-ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:3])
-ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:3])
-
-
-n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_severity_2)] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_severity_2)] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-
-ve.wane.3m.severity <- 
-  data.frame(
-  case_control = rep("RSV+ hospitalizations vs. RSV-", 3),
-  strata = c("not immunized", "immunized 0-3 months ago", "immuniaed 3-6 months ago"),
-  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
-  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
-  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
-  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
-)
-
-
-########################################
-# RSV+ LRTI vs. all RSV- 
-########################################
-
-df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
-                                                  positive_rsv == 0 ~ 0)) 
-
-
-
-# unadjusted
-model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_2, data = df.wane, family = "binomial")
-
-ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:3])
-ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:3])
-ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:3])
-
-# adjusted 
-formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_2 + ", 
-                             paste(confounders_severity_2, collapse = " + ")))
-model.adj <- glm(formula, data = df.wane, family = "binomial")
-ve.median.adj <- 1 - exp(model.adj$coefficients[2:3])
-ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:3])
-ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:3])
-
-
-n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_severity_2)] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_severity_2)] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-
-ve.wane.3m.LRTI <- 
-  data.frame(
-  case_control = rep("RSV+ LRTI vs. RSV-", 3),
-  strata = c("not immunized", "immunized 0-3 months ago", "immuniaed 3-6 months ago"),
-  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
-  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
-  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
-  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
-)
-
-
-
-########################################
-# RSV+ LRTI hospitalizations vs. all RSV- 
-########################################
-
-df.wane <- df %>% mutate(case_control = case_when(positive_rsv == 1 & encounter_type == "inpatient" &
-                                                    symp_LRT_distress == 1 ~ 1,
-                                                  positive_rsv == 0 ~ 0)) 
-
-
-
-# unadjusted
-model.unadj <- glm(case_control ~ days_btw_mab_collection_cat_2, data = df.wane, family = "binomial")
-ve.median.unadj <- 1 - exp(model.unadj$coefficients[2:3])
-ve.ub.unadj <- 1 - exp(confint(model.unadj)[,1][2:3])
-ve.lb.unadj <- 1 - exp(confint(model.unadj)[,2][2:3])
-
-# adjusted 
-formula <- as.formula(paste0("case_control ~ days_btw_mab_collection_cat_2 + ", 
-                             paste(confounders_severity_2, collapse = " + ")))
-model.adj <- glm(formula, data = df.wane, family = "binomial")
-ve.median.adj <- 1 - exp(model.adj$coefficients[2:3])
-ve.ub.adj <- 1 - exp(confint(model.adj)[,1][2:3])
-ve.lb.adj <- 1 - exp(confint(model.adj)[,2][2:3])
-
-
-n.cases <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2")] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-n.cases.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_severity_2)] %>%
-  drop_na() %>% filter(case_control == 1) %>% count(days_btw_mab_collection_cat_2)
-n.controls.adj <- df.wane[, c("case_control", "days_btw_mab_collection_cat_2", confounders_severity_2)] %>%
-  drop_na() %>% filter(case_control == 0) %>% count(days_btw_mab_collection_cat_2)
-
-
-ve.wane.3m.LRTIhosp <- 
-  data.frame(
-  case_control = rep("RSV+ LRTI hospitalizations vs. RSV-", 3),
-  strata = c("not immunized", "immunized 0-3 months ago", "immuniaed 3-6 months ago"),
-  n.cases = paste0(n.cases[,2], " (", n.cases.adj[,2], ")"),
-  n.controls = paste0(n.controls[,2], " (", n.controls.adj[,2], ")"),
-  VE.unadjusted = c("REF", paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")")),
-  VE.adjusted = c("REF", paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")"))
-)
-
-rbind(ve.wane.3m.infection, ve.wane.3m.severity, ve.wane.3m.LRTI, ve.wane.3m.LRTIhosp) %>%
-  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
-            defaultExpanded = T, defaultPageSize = 20, groupBy = "case_control") 
+if(savenewplot){
+  ggsave(plot = plt.wane.2m, filename = "../figs_tabs/figures/wane.2m.pdf", height = 4, width = 8)
+}
 ```
+
+
 
 <br>
 
@@ -1276,7 +1109,7 @@ df_table1_dosage <- df_table1 %>%
   filter(!is.na(rsv_mab_dose))
 
 table1_dosage <- df_table1_dosage %>% 
-  dplyr::select(-rsv_mab, -encounter_type, -positive_rsv) %>%
+  dplyr::select(-rsv_mab, -encounter_type, -positive_rsv, -symp_LRT_distress) %>%
   tbl_summary(by = rsv_mab_dose,
               
               type = list(all_continuous() ~ "continuous2"),       # indicate that you want to print multiple statistics 
@@ -1295,8 +1128,7 @@ table1_dosage <- df_table1_dosage %>%
                 month_when_tested_cat ~ "Time tested", 
                 race_ethnicity ~ "Race and ethnicity",
                 risk_factor_pulmonary ~ "Pulmonary diseases", 
-                risk_factor_cardiac ~ "Cardiac diseases", 
-                risk_factor_asthma ~ "Asthma", 
+                risk_factor_cardiac ~ "Cardiac diseases",
                 risk_factor_anemia ~ "Anemia",
                 risk_factor_gestagelessthan37wks ~ "Gestational age",
                 risk_factor_atleastone ~ "Having at least one risk factor",
@@ -1328,6 +1160,7 @@ table1_dosage %>% as_flex_table() %>%
   flextable::set_table_properties( width = 1, layout = "autofit") 
   
 ```
+
 #### Table `r tab.counter` VE by dosage (100mg vs. not vaccinated)
 ```{r warning=F}
 tab.counter <- tab.counter + 1
@@ -1336,214 +1169,81 @@ df.100mg <- df %>%
   mutate(rsv_mab = case_when(rsv_mab_dose == "100mg" ~ 1,
                              rsv_mab == 0 ~ 0))
 
-
-###################################
-# inpatient RSV+ vs. inpatient RSV-
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 ~ 1,
-                                  encounter_type == "inpatient" & positive_rsv == 0 ~ 0))
+##########################
+# Against RSV infection (inpatient + outpatient)
+##########################
+df.ve <- df.100mg %>% mutate(case_control = positive_rsv)
 
 ve.1 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (inpatient)", control = "RSV- (inpatient)")
+ mutate(against = "RSV infection")
 
 
-###################################
-# outpatient RSV+ vs. outpatient RSV-
-###################################
+##########################
+# Against RSV hospitalizations
+##########################
 df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "outpatient" & positive_rsv == 1 ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 0 ~ 0))
+  filter(encounter_type == "inpatient") %>% mutate(case_control = positive_rsv)
 
 ve.2 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (outpatient)", control = "RSV- (outpatient)")
+ mutate(against = "RSV-associated hospitalization")
 
-###################################
-# all RSV+ vs. all RSV-
-###################################
+
+##########################
+# Against RSV ED visit
+##########################
+# remove those "Specimen"? 
 df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(encounter_type == "outpatient") %>% mutate(case_control = positive_rsv)
 
 ve.3 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (all)", control = "RSV- (all)")
+ mutate(against = "RSV-associated outpatient visit")
 
-
-###################################
-# RSV+ hospitalized vs. all RSV- 
-###################################
+##########################
+# Against RSV-associated LRTI
+##########################
 df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(symp_LRT_distress == 1) %>% mutate(case_control = positive_rsv)
 
-ve.4 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ hospitalizations", control = "RSV- (all)")
+ve.4 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated LRTI")
 
 
-###################################
-# severe RSV+ hospitalized vs. all RSV- 
-###################################
+##########################
+# Against RSV-associated LRTI hospitalization
+##########################
 df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(symp_LRT_distress == 1 & encounter_type == "inpatient") %>% 
+  mutate(case_control = positive_rsv)
 
-ve.5 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ hospitalizations", control = "RSV- (all)")
+ve.5 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated LRTI hospitalization")
 
-###################################
-# RSV+ icu vs. all RSV- 
-###################################
+
+
+
+##########################
+# Against RSV-associated severe disease outcomes
+##########################
+# severe disease outcome includes: ICU admissions or high flow rate oxygen support
 df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(icu_admitted == "yes" | highflow_oxygen == 1) %>% 
+  mutate(case_control = positive_rsv)
 
-ve.6 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ ICU admission", control = "RSV- (all)")
-
-###################################
-# RSV+ LRT-hospitalizations vs. all RSV- 
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    ( symp_LRT_distress == 1 ) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.7 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ LRTI hospitalizations", control = "RSV- (all)")
+ve.6 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated severe outcomes")
 
 
-###################################
-# severe RSV+ LRT-hospitalizations vs. all RSV- 
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    ( symp_LRT_distress == 1 ) &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.8 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ LRTI hospitalizations", control = "RSV- (all)")
-
-
-###################################
-# RSV LRTI vs. all RSV- 
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.9 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ LRTI", control = "RSV- (all)")
-
-
-###################################
-# severe RSV LRTI vs. all RSV- 
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.10 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ LRTI", control = "RSV- (all)")
-
-
-
-###################################
-# all-cause hospitalizations vs. outpatient  
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient"  ~ 1,
-                                  encounter_type == "outpatient" ~ 0))
-
-ve.11 <- regress_unmatch(df.ve = df.ve, confounders = confounders_encounter) %>% 
- mutate(case = "all-cause hospitalizations", control = "not hospitalized")
-
-
-###################################
-# LRT-hospitalizations vs. outpatient  
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & symp_LRT_distress == 1  ~ 1,
-                                  encounter_type == "outpatient" ~ 0))
-
-ve.12 <- regress_unmatch(df.ve = df.ve, confounders = confounders_encounter) %>% 
- mutate(case = "LRTI hospitalizations", control = "not hospitalized")
-
-
-###################################
-# LRTI vs. no LRTI  
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(symp_LRT_distress == 1  ~ 1,
-                                  TRUE ~ 0))
-
-ve.13 <- regress_unmatch(df.ve = df.ve, confounders = confounders_LRTI) %>% 
- mutate(case = "LRTI", control = "no LRTI")
-
-
-###################################
-# RSV+ hospitalization vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1  ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.14 <- regress_unmatch(df.ve = df.ve,  confounders = confounders_severity) %>% 
- mutate(case = "RSV+ hospitalizations", control = "RSV+ outpatient")
-
-
-
-###################################
-# severe RSV+ hospitalization vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) == 1  ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.15 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "severe RSV+ hospitalizations", control = "RSV+ outpatient")
-
-
-###################################
-# RSV+ LRTI vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.16 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "RSV+ LRTI", control = "RSV+ outpatient")
-
-
-###################################
-# severe RSV+ LRTI vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.100mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 & 
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.17 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "severe RSV+ LRTI", control = "RSV+ outpatient")
-
-
+## combine the results 
 # combine the tables together 
 ve.100mg <- 
   rbind(
-  ve.1, ve.2, ve.3, ve.4, ve.5,
-  ve.7, ve.8, ve.9, ve.10,
-  ve.11, ve.12, ve.13, ve.14, ve.15, 
-  ve.16, ve.17
+  ve.1, ve.2, ve.3, ve.4, ve.5, ve.6
 ) %>% 
-  dplyr::select(case, control, n_cases_mab, n_cases_nomab, n_controls_mab, n_controls_nomab, ve_unadj, ve_adj) 
-
+  dplyr::select(against, n_cases_mab, n_cases_nomab, n_controls_mab, n_controls_nomab, ve_unadj, ve_adj) 
 
 ve.100mg %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
-            defaultExpanded = T, defaultPageSize = 20) 
+            defaultExpanded = T, defaultPageSize = 20)
 ```
 
 #### Table `r tab.counter` VE by dosage (50mg vs. not vaccinated)
@@ -1555,213 +1255,81 @@ df.50mg <- df %>%
                              rsv_mab == 0 ~ 0))
 
 
-###################################
-# inpatient RSV+ vs. inpatient RSV-
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 ~ 1,
-                                  encounter_type == "inpatient" & positive_rsv == 0 ~ 0))
+##########################
+# Against RSV infection (inpatient + outpatient)
+##########################
+df.ve <- df.50mg %>% mutate(case_control = positive_rsv)
 
 ve.1 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (inpatient)", control = "RSV- (inpatient)")
+ mutate(against = "RSV infection")
 
 
-###################################
-# outpatient RSV+ vs. outpatient RSV-
-###################################
+##########################
+# Against RSV hospitalizations
+##########################
 df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "outpatient" & positive_rsv == 1 ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 0 ~ 0))
+  filter(encounter_type == "inpatient") %>% mutate(case_control = positive_rsv)
 
 ve.2 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (outpatient)", control = "RSV- (outpatient)")
+ mutate(against = "RSV-associated hospitalization")
 
-###################################
-# all RSV+ vs. all RSV-
-###################################
+
+##########################
+# Against RSV ED visit
+##########################
+# remove those "Specimen"? 
 df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(encounter_type == "outpatient") %>% mutate(case_control = positive_rsv)
 
 ve.3 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
- mutate(case = "RSV+ (all)", control = "RSV- (all)")
+ mutate(against = "RSV-associated outpatient visit")
 
-
-###################################
-# RSV+ hospitalized vs. all RSV- 
-###################################
+##########################
+# Against RSV-associated LRTI
+##########################
 df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(symp_LRT_distress == 1) %>% mutate(case_control = positive_rsv)
 
-ve.4 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ hospitalizations", control = "RSV- (all)")
+ve.4 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated LRTI")
 
 
-###################################
-# severe RSV+ hospitalized vs. all RSV- 
-###################################
+##########################
+# Against RSV-associated LRTI hospitalization
+##########################
 df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(symp_LRT_distress == 1 & encounter_type == "inpatient") %>% 
+  mutate(case_control = positive_rsv)
 
-ve.5 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ hospitalizations", control = "RSV- (all)")
+ve.5 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated LRTI hospitalization")
 
-###################################
-# RSV+ icu vs. all RSV- 
-###################################
+
+
+
+##########################
+# Against RSV-associated severe disease outcomes
+##########################
+# severe disease outcome includes: ICU admissions or high flow rate oxygen support
 df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & icu_admitted == "yes" ~ 1,
-                                  positive_rsv == 0 ~ 0))
+  filter(icu_admitted == "yes" | highflow_oxygen == 1) %>% 
+  mutate(case_control = positive_rsv)
 
-ve.6 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ ICU admission", control = "RSV- (all)")
-
-###################################
-# RSV+ LRT-hospitalizations vs. all RSV- 
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    ( symp_LRT_distress == 1 ) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.7 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ LRTI hospitalizations", control = "RSV- (all)")
+ve.6 <- regress_unmatch(df.ve = df.ve, confounders = confounders_infection) %>% 
+ mutate(against = "RSV-associated severe outcomes")
 
 
-###################################
-# severe RSV+ LRT-hospitalizations vs. all RSV- 
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    ( symp_LRT_distress == 1 ) &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.8 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ LRTI hospitalizations", control = "RSV- (all)")
-
-
-###################################
-# RSV LRTI vs. all RSV- 
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.9 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "RSV+ LRTI", control = "RSV- (all)")
-
-
-###################################
-# severe RSV LRTI vs. all RSV- 
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  positive_rsv == 0 ~ 0))
-
-ve.10 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity_2) %>% 
- mutate(case = "severe RSV+ LRTI", control = "RSV- (all)")
-
-
-
-###################################
-# all-cause hospitalizations vs. outpatient  
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient"  ~ 1,
-                                  encounter_type == "outpatient" ~ 0))
-
-ve.11 <- regress_unmatch(df.ve = df.ve, confounders = confounders_encounter) %>% 
- mutate(case = "all-cause hospitalizations", control = "not hospitalized")
-
-
-###################################
-# LRT-hospitalizations vs. outpatient  
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & symp_LRT_distress == 1  ~ 1,
-                                  encounter_type == "outpatient" ~ 0))
-
-ve.12 <- regress_unmatch(df.ve = df.ve, confounders = confounders_encounter) %>% 
- mutate(case = "LRTI hospitalizations", control = "not hospitalized")
-
-
-###################################
-# LRTI vs. no LRTI  
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(symp_LRT_distress == 1  ~ 1,
-                                  TRUE ~ 0))
-
-ve.13 <- regress_unmatch(df.ve = df.ve, confounders = confounders_LRTI) %>% 
- mutate(case = "LRTI", control = "no LRTI")
-
-
-###################################
-# RSV+ hospitalization vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1  ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.14 <- regress_unmatch(df.ve = df.ve,  confounders = confounders_severity) %>% 
- mutate(case = "RSV+ hospitalizations", control = "RSV+ outpatient")
-
-
-
-###################################
-# severe RSV+ hospitalization vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(encounter_type == "inpatient" & positive_rsv == 1 &
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) == 1  ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.15 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "severe RSV+ hospitalizations", control = "RSV+ outpatient")
-
-
-###################################
-# RSV+ LRTI vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.16 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "RSV+ LRTI", control = "RSV+ outpatient")
-
-
-###################################
-# severe RSV+ LRTI vs. RSV+ outpatient (case-only)
-###################################
-df.ve <- df.50mg %>% 
-  mutate(case_control = case_when(positive_rsv == 1 & symp_LRT_distress == 1 & 
-                                    (icu_admitted == "yes" | highflow_oxygen == 1) ~ 1,
-                                  encounter_type == "outpatient" & positive_rsv == 1 ~ 0))
-
-ve.17 <- regress_unmatch(df.ve = df.ve, confounders = confounders_severity) %>% 
- mutate(case = "severe RSV+ LRTI", control = "RSV+ outpatient")
-
-
+## combine the results 
 # combine the tables together 
 ve.50mg <- 
   rbind(
-  ve.1, ve.2, ve.3, ve.4, ve.5,
-  ve.7, ve.8, ve.9, ve.10,
-  ve.11, ve.12, ve.13, ve.14, ve.15, 
-  ve.16, ve.17
+  ve.1, ve.2, ve.3, ve.4, ve.5, ve.6
 ) %>% 
-  dplyr::select(case, control, n_cases_mab, n_cases_nomab, n_controls_mab, n_controls_nomab, ve_unadj, ve_adj) 
-
+  dplyr::select(against, n_cases_mab, n_cases_nomab, n_controls_mab, n_controls_nomab, ve_unadj, ve_adj) 
 
 ve.50mg %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
-            defaultExpanded = T, defaultPageSize = 20) 
+            defaultExpanded = T, defaultPageSize = 20)
 ```
 
 #### Table `r tab.counter`. Compare VE from 50mg and 100mg dosage
@@ -1769,11 +1337,11 @@ ve.50mg %>%
 tab.counter <- tab.counter + 1
 
 ve.50mg %>% 
-  dplyr::select(case, control, ve_unadj, ve_adj) %>%
+  dplyr::select(against, ve_unadj, ve_adj) %>%
   rename(VE.unadjusted.50mg = ve_unadj, VE.adjusted.50mg = ve_adj) %>%
   left_join(
     ve.100mg %>% 
-      dplyr::select(case, control, ve_unadj, ve_adj) %>%
+      dplyr::select(against, ve_unadj, ve_adj) %>%
       rename(VE.unadjusted.100mg = ve_unadj, VE.adjusted.100mg = ve_adj) 
   ) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
@@ -1791,6 +1359,69 @@ ve.50mg %>%
 ```
 
 <br>
+
+#### Visualize the results
+```{r fig.width = 12, fig.height = 7}
+# rearrange data frame for plotting
+ve.dose <- 
+  cbind(
+    ve.100mg %>% 
+      dplyr::rename(n_cases_mab_100mg = n_cases_mab, 
+                    n_controls_mab_100mg = n_controls_mab,
+                    ve_unadj_100mg = ve_unadj,
+                    ve_adj_100mg = ve_adj) %>%
+      dplyr::select(against, n_cases_mab_100mg, n_cases_nomab, n_controls_mab_100mg, n_controls_nomab, ve_unadj_100mg, ve_adj_100mg),
+    ve.50mg %>% 
+      dplyr::rename(n_cases_mab_50mg = n_cases_mab, 
+                    n_controls_mab_50mg = n_controls_mab,
+                    ve_unadj_50mg = ve_unadj,
+                    ve_adj_50mg = ve_adj) %>%
+      dplyr::select(n_cases_mab_50mg, n_controls_mab_50mg, ve_unadj_50mg, ve_adj_50mg)
+  )
+
+source("utils_mAb_VE.R")
+
+ve_forest_dose()
+```
+
+
+#### Combine plot of any dose, 100mg, 50mg
+```{r fig.width = 12, fig.height = 10}
+# rearrange data frame for plotting
+ve.dose.addanydose <- 
+  cbind(
+    ve.100mg %>% 
+      dplyr::rename(n_cases_mab_100mg = n_cases_mab, 
+                    n_controls_mab_100mg = n_controls_mab,
+                    ve_unadj_100mg = ve_unadj,
+                    ve_adj_100mg = ve_adj) %>%
+      dplyr::select(against, n_cases_mab_100mg, n_cases_nomab, n_controls_mab_100mg, n_controls_nomab, ve_unadj_100mg, ve_adj_100mg),
+    ve.50mg %>% 
+      dplyr::rename(n_cases_mab_50mg = n_cases_mab, 
+                    n_controls_mab_50mg = n_controls_mab,
+                    ve_unadj_50mg = ve_unadj,
+                    ve_adj_50mg = ve_adj) %>%
+      dplyr::select(n_cases_mab_50mg, n_controls_mab_50mg, ve_unadj_50mg, ve_adj_50mg),
+    ve %>% 
+      dplyr::rename(n_cases_mab_anydose = n_cases_mab, 
+                    n_controls_mab_anydose = n_controls_mab,
+                    ve_unadj_anydose = ve_unadj,
+                    ve_adj_anydose = ve_adj) %>%
+      dplyr::select(n_cases_mab_anydose, n_controls_mab_anydose, ve_unadj_anydose, ve_adj_anydose)
+  )
+
+source("utils_mAb_VE.R")
+
+plt.ve.dose.addanydose <- ve_forest_dose_addanydose()
+
+plt.ve.dose.addanydose
+
+if(savenewplot){
+  ggsave(plot = plt.ve.dose.addanydose, filename = "../figs_tabs/figures/ve.dose.addanydose.pdf", height = 10, width = 12)
+}
+
+```
+
 
 
 

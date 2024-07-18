@@ -1144,10 +1144,10 @@ df <- df %>%
   mutate(med_hist_cvd = ifelse(med_hist_congen_heart == 1 & is.na(med_hist_cvd), 1, med_hist_cvd)) %>%
   mutate(med_hist_earlyterm = case_when(grepl(pattern_earlyterm, `Medical History`, ignore.case = T) ~ 1)) %>%
   mutate(med_hist_fullterm = case_when(grepl(pattern_fullterm, `Medical History`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Medical History`, ignore.case = T) ~ 1)) %>%
-  # added this per team's checking advice
-  mutate(med_hist_wheezing = case_when(grepl(pattern_wheezing, `Medical History`, ignore.case = T) ~ 1)) %>%
-  mutate(med_hist_environmental = case_when(grepl(pattern_environmental, `Medical History`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Medical History`, ignore.case = T) ~ 1)) 
+  # # added this per team's checking advice
+  # mutate(med_hist_wheezing = case_when(grepl(pattern_wheezing, `Medical History`, ignore.case = T) ~ 1)) %>%
+  # mutate(med_hist_environmental = case_when(grepl(pattern_environmental, `Medical History`, ignore.case = T) ~ 1))
 
   
 
@@ -1177,10 +1177,10 @@ df <- df %>%
   mutate(prob_list_cvd = ifelse(prob_list_congen_heart == 1 & is.na(prob_list_cvd), 1, prob_list_cvd)) %>%
   mutate(prob_list_earlyterm = case_when(grepl(pattern_earlyterm, `Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(prob_list_fullterm = case_when(grepl(pattern_fullterm, `Problem List`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Problem List`, ignore.case = T) ~ 1)) %>%
-  # added this per team's advice
-  mutate(prob_list_wheezing = case_when(grepl(pattern_wheezing, `Problem List`, ignore.case = T) ~ 1)) %>%
-  mutate(prob_list_environmental = case_when(grepl(pattern_environmental, `Problem List`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Problem List`, ignore.case = T) ~ 1))
+  # # added this per team's advice
+  # mutate(prob_list_wheezing = case_when(grepl(pattern_wheezing, `Problem List`, ignore.case = T) ~ 1)) %>%
+  # mutate(prob_list_environmental = case_when(grepl(pattern_environmental, `Problem List`, ignore.case = T) ~ 1))
 
 ```
 
@@ -1207,9 +1207,9 @@ df <- df %>%
   mutate(prim_prob_cvd = ifelse(prim_prob_congen_heart == 1 & is.na(prim_prob_cvd), 1, prim_prob_cvd)) %>%
   mutate(prim_prob_earlyterm = case_when(grepl(pattern_earlyterm, `Primary Problem`, ignore.case = T) ~ 1)) %>%
   mutate(prim_prob_fullterm = case_when(grepl(pattern_fullterm, `Primary Problem`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Primary Problem`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(prim_prob_environmental = case_when(grepl(pattern_environmental, `Primary Problem`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Primary Problem`, ignore.case = T) ~ 1)) 
+  # # added per team's checking advice
+  # mutate(prim_prob_environmental = case_when(grepl(pattern_environmental, `Primary Problem`, ignore.case = T) ~ 1))
   
 
 # extract conditions related to respiratory infection
@@ -1249,9 +1249,9 @@ df <- df %>%
   mutate(ED_dx_cvd = ifelse(ED_dx_congen_heart == 1 & is.na(ED_dx_cvd), 1, ED_dx_cvd)) %>%
   mutate(ED_dx_earlyterm = case_when(grepl(pattern_earlyterm, `ED Dx`, ignore.case = T) ~ 1)) %>%
   mutate(ED_dx_fullterm = case_when(grepl(pattern_fullterm, `ED Dx`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `ED Dx`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(ED_dx_environmental = case_when(grepl(pattern_environmental, `ED Dx`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `ED Dx`, ignore.case = T) ~ 1)) 
+  # # added per team's checking advice
+  # mutate(ED_dx_environmental = case_when(grepl(pattern_environmental, `ED Dx`, ignore.case = T) ~ 1))
 
 
 # extract conditions related to respiratory infection
@@ -1293,9 +1293,9 @@ df <- df %>%
   mutate(admit_dx_cvd = ifelse(admit_dx_congen_heart == 1 & is.na(admit_dx_cvd), 1, admit_dx_cvd)) %>%
   mutate(admit_dx_earlyterm = case_when(grepl(pattern_earlyterm, `Admit Dx`, ignore.case = T) ~ 1)) %>%
   mutate(admit_dx_fullterm = case_when(grepl(pattern_fullterm, `Admit Dx`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Admit Dx`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(admit_dx_environmental = case_when(grepl(pattern_environmental, `Admit Dx`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Admit Dx`, ignore.case = T) ~ 1))
+  # # added per team's checking advice
+  # mutate(admit_dx_environmental = case_when(grepl(pattern_environmental, `Admit Dx`, ignore.case = T) ~ 1))
 
 # extract conditions related to respiratory infection 
 df <- df %>% 
@@ -1335,9 +1335,9 @@ df <- df %>%
   mutate(hosp_prob_cvd = ifelse(hosp_prob_congen_heart == 1 & is.na(hosp_prob_cvd), 1, hosp_prob_cvd)) %>%
   mutate(hosp_prob_earlyterm = case_when(grepl(pattern_earlyterm, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
   mutate(hosp_prob_fullterm = case_when(grepl(pattern_fullterm, `Hospital Problem List`, ignore.case = T)  & 
-                                           !grepl(pattern_preterm, `Hospital Problem List`, ignore.case = T) ~ 1)) %>%
-  # added per team's checking advice
-  mutate(hosp_prob_environmental = case_when(grepl(pattern_environmental, `Hospital Problem List`, ignore.case = T) ~ 1))
+                                           !grepl(pattern_preterm, `Hospital Problem List`, ignore.case = T) ~ 1)) 
+  # # added per team's checking advice
+  # mutate(hosp_prob_environmental = case_when(grepl(pattern_environmental, `Hospital Problem List`, ignore.case = T) ~ 1))
 
 
 # extract conditions related to respiratory infection
@@ -1401,11 +1401,11 @@ df <- df %>%
                                            gest_age_cat == "preterm" ~ 1)) %>%
   mutate(risk_factor_postterm = case_when(med_hist_postterm == 1 | prob_list_postterm == 1 | prim_prob_postterm == 1 | 
                                           ED_dx_postterm == 1 | admit_dx_postterm == 1 | hosp_prob_postterm == 1 | 
-                                            gest_age_cat == "post term" ~ 1)) %>%
-  # added per team's checking advice 
-  mutate(risk_factor_wheezing = case_when(med_hist_wheezing == 1 | prob_list_wheezing == 1 ~ 1)) %>%
-  mutate(risk_factor_environmental = case_when(med_hist_environmental == 1 | prob_list_environmental == 1 | prim_prob_environmental == 1 | 
-                                          ED_dx_environmental == 1 | admit_dx_environmental == 1 | hosp_prob_environmental == 1 ~ 1))
+                                            gest_age_cat == "post term" ~ 1)) 
+  # # added per team's checking advice 
+  # mutate(risk_factor_wheezing = case_when(med_hist_wheezing == 1 | prob_list_wheezing == 1 ~ 1)) %>%
+  # mutate(risk_factor_environmental = case_when(med_hist_environmental == 1 | prob_list_environmental == 1 | prim_prob_environmental == 1 | 
+  #                                         ED_dx_environmental == 1 | admit_dx_environmental == 1 | hosp_prob_environmental == 1 ~ 1))
 
 
 # added per team's checking advice
@@ -1461,7 +1461,7 @@ df.uncertain %>%
 
 <br>
 
-#### The team helped checked above records and classified them suspected respiratory infections or not, remove those that are not suspected respiratory infections. Deleted 212 records.
+#### The team helped checked above records and classified them suspected respiratory infections or not, remove those that are not suspected respiratory infections. Deleted 212 records (leaving 66 records from above table)
 ```{r}
 df.check.suspect <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/records_need_help.xlsx", sheet = "uncertain_suspected_respiratory") %>% mutate(collection_date = as.Date(collection_date))
 
@@ -1503,11 +1503,11 @@ data.frame(
   #full_term = nrow(df %>% filter(risk_factor_fullterm == 1)),
   preterm = nrow(df %>% filter(risk_factor_preterm == 1)),
   #post_term = nrow(df %>% filter(risk_factor_postterm == 1)),
-  wheezing = nrow(df %>% filter(risk_factor_wheezing == 1)),
-  environmental = nrow(df %>% filter(risk_factor_environmental == 1)),
+  #wheezing = nrow(df %>% filter(risk_factor_wheezing == 1)),
+  #environmental = nrow(df %>% filter(risk_factor_environmental == 1)),
   small_for_gestage = nrow(df %>% filter(risk_factor_small_for_gestage == 1))
 ) %>%
-  pivot_longer(cols = 1:12, names_to = "risk_factor", values_to = "n_records") %>%
+  pivot_longer(cols = 1:10, names_to = "risk_factor", values_to = "n_records") %>%
   arrange(desc(n_records)) %>%
   mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -1555,28 +1555,29 @@ df <- df %>% dplyr::select(-c(risk_factor_earlyterm, risk_factor_fullterm, risk_
   * After discussing with Carlos, GI should not be counted as a risk factor, thus re-check those marked as having GI disease to see if they truly are high risk individuals.
 ```{r}
 # read in the records checked by team
-df.risk.checked <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/records_need_help.xlsx", sheet = "uncertain_high_risk")
+df.risk.checked <- read_excel("/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/records_need_help.xlsx", sheet = "uncertain_high_risk") %>% 
+  filter(!is.na(StudyID))
 
 
-df.risk.checked <- df.risk.checked %>% dplyr::select(-risk_factor_gi) %>% 
-  rename(risk_factor_wheezing = risk_factor_hx_wheezing) %>% 
-  rename(risk_factor_small_for_gestage = `risk_factors_small for gestational age`) %>%
+df.risk.checked <- df.risk.checked %>% 
   mutate(across(starts_with("risk_factor"), ~ ifelse(is.na(.), 0, .))) %>%
+  mutate(risk_factor_preterm = ifelse(risk_factor_preterm == 2, 0, risk_factor_preterm)) %>%
+  mutate(risk_factor_preterm = as.numeric(risk_factor_preterm)) %>%
   mutate(sum_risk_factor = risk_factor_preterm + 
            risk_factor_anemia +
            risk_factor_pulmonary +
            risk_factor_cardiac + 
-           risk_factor_asthma + 
            risk_factor_down +
-           risk_factor_liver +
-           risk_factor_immunodeficiency + 
-           risk_factor_environmental + 
-           risk_factor_wheezing + 
+           risk_factor_immunodeficiency +
            risk_factor_small_for_gestage) 
 
+# the only preterm one in df.risk.checked is 130584733, fill this in
+df[which(df$StudyID == "130584733"), ]$risk_factor_gestage <- "preterm"
+
+
 # filter out those that has no risk factors (assigned 0/1 by team) , so these infants are not eligible for Nirsevimab
-# out of the sum_risk_factor == 0 kids (totally 528), there are 132 RSV+
-# out of the sum_risk_factor == 1 kids (totally 48), there are 16 RSV+.
+# out of the sum_risk_factor == 0 kids (totally 519), there are 137 RSV+
+# out of the sum_risk_factor > 0 kids (totally 57), there are 11 RSV+.
 StudyID.toremove <- (df.risk.checked %>% filter(sum_risk_factor == 0))$StudyID
 
 # remove these non-high-risk older infants from current df 
@@ -1596,16 +1597,11 @@ for(i in 1:nrow(df.high.risk)){
   if(nrow(df[which(df$StudyID == id.temp),]) != 0){
     # assign team's checking results into the current df 
     
-    if(df.high.risk.temp$risk_factor_preterm == 1){df[which(df$StudyID == id.temp),]$risk_factor_preterm <- 1}
     if(df.high.risk.temp$risk_factor_anemia == 1){df[which(df$StudyID == id.temp),]$risk_factor_anemia <- 1}
     if(df.high.risk.temp$risk_factor_pulmonary == 1){df[which(df$StudyID == id.temp),]$risk_factor_pulmonary <- 1}
     if(df.high.risk.temp$risk_factor_cardiac == 1){df[which(df$StudyID == id.temp),]$risk_factor_cardiac < 1}
-    if(df.high.risk.temp$risk_factor_asthma == 1){df[which(df$StudyID == id.temp),]$risk_factor_asthma <- 1}
     if(df.high.risk.temp$risk_factor_down == 1){df[which(df$StudyID == id.temp),]$risk_factor_down <- 1}
-    if(df.high.risk.temp$risk_factor_liver == 1){df[which(df$StudyID == id.temp),]$risk_factor_liver <- 1}
     if(df.high.risk.temp$risk_factor_immunodeficiency == 1){df[which(df$StudyID == id.temp),]$risk_factor_immunodeficiency <- 1}
-    if(df.high.risk.temp$risk_factor_environmental == 1){df[which(df$StudyID == id.temp),]$risk_factor_environmental <- 1}
-    if(df.high.risk.temp$risk_factor_wheezing == 1){df[which(df$StudyID == id.temp),]$risk_factor_wheezing <- 1}
     df[which(df$StudyID == id.temp),]$risk_factor_small_for_gestage <- df.high.risk.temp$risk_factor_small_for_gestage
     
   }
@@ -1634,18 +1630,14 @@ tab.counter <- tab.counter + 1
 
 data.frame(
   anemia = nrow(df %>% filter(risk_factor_anemia == 1)),
-  asthma = nrow(df %>% filter(risk_factor_asthma == 1)),
-  liver_disease = nrow(df %>% filter(risk_factor_liver == 1)),
   immunodeficiency = nrow(df %>% filter(risk_factor_immunodeficiency == 1)),
   cardiac = nrow(df %>% filter(risk_factor_cardiac == 1)),
   pulmonary_disease = nrow(df %>% filter(risk_factor_pulmonary == 1)),
   down_syndrome = nrow(df %>% filter(risk_factor_down == 1)),
-  wheezing = nrow(df %>% filter(risk_factor_wheezing == 1)),
-  environmental = nrow(df %>% filter(risk_factor_environmental == 1)),
   small_for_gestage = nrow(df %>% filter(risk_factor_small_for_gestage == 1)),
   gestage_lessthan37wks = nrow(df %>% filter(risk_factor_gestagelessthan37wks == 1))
 ) %>%
-  pivot_longer(cols = 1:11, names_to = "risk_factor", values_to = "n_records") %>%
+  pivot_longer(cols = 1:7, names_to = "risk_factor", values_to = "n_records") %>%
   arrange(desc(n_records)) %>%
   mutate(perc = round(n_records / nrow(df)*100,1)) %>% 
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
@@ -1661,14 +1653,14 @@ tab.counter <- tab.counter + 1
 
 df <- df %>%
   mutate(risk_factor_atleastone = case_when(risk_factor_anemia == 1 |
-                                            risk_factor_asthma == 1 |
-                                            risk_factor_liver == 1 |
+                                            # risk_factor_asthma == 1 |
+                                            # risk_factor_liver == 1 |
                                             risk_factor_immunodeficiency == 1 |
                                             risk_factor_cardiac == 1 |
                                             risk_factor_pulmonary == 1 | 
                                             risk_factor_down == 1 |
-                                            risk_factor_wheezing == 1 |
-                                            risk_factor_environmental == 1 |
+                                            # risk_factor_wheezing == 1 |
+                                            # risk_factor_environmental == 1 |
                                             risk_factor_small_for_gestage == 1 |
                                             risk_factor_gestagelessthan37wks == 1 ~ 1,
                                             TRUE ~ 0))
@@ -2278,12 +2270,7 @@ table1( ~ factor(Sex) +
           age_at_test_in_months + 
           factor(encounter_type) +
           factor(insurance_type) +
-          factor(risk_factor_gestage) +
-          factor(risk_factor_cardiac) +
-          factor(risk_factor_gi) +
-          factor(risk_factor_pulmonary) +
-          factor(risk_factor_asthma) +
-          factor(risk_factor_anemia) 
+          factor(risk_factor_atleastone) 
         | positive_rsv, data = df, overall= F,
           extra.col=list(`P-value`=pvalue))
 
@@ -2292,6 +2279,44 @@ table1( ~ factor(Sex) +
 
 <br>
 
+
+### Generate data for sensitive analysis
+#### Instead of defining "vaccinated" as being vaccinated before date of sample collection, in the sensitive analysis, use an alternative definition for "vaccinated": only those vaccinated >= 7 days before the sample collection date. After changing the definition, 13 originally considered "vaccinated" individuals converted to "unvaccinated group". 
+```{r}
+df.ssa <- df %>% 
+  mutate(rsv_mab_ssa = ifelse(days_btw_mab_collection <= -7, 1, 0)) %>%
+  mutate(rsv_mab_ssa = ifelse(is.na(rsv_mab_ssa), 0, rsv_mab_ssa))
+
+df.ssa %>% count(rsv_mab_ssa) %>%
+  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px")) 
+
+# also need to change the defintion of dosage 
+df.ssa <- df.ssa %>% 
+  mutate(rsv_mab_detailed = case_when(rsv_mab_ssa == 1 & 
+                                        rsv_mab_detailed == "50mg before collection" ~ "50mg before collection",
+                                      rsv_mab_ssa == 1 & 
+                                        rsv_mab_detailed == "100mg before collection" ~ "100mg before collection",
+                                      rsv_mab_ssa == 0 & 
+                                        rsv_mab_detailed == "50mg before collection" ~ "50mg after collection",
+                                      rsv_mab_ssa == 0 & 
+                                        rsv_mab_detailed == "100mg before collection" ~ "100mg after collection"))
+
+
+
+```
+
+```{r echo = T}
+save_recoded_dataset <- FALSE
+
+
+if(save_recoded_dataset){
+  write.csv(df.ssa, "../../data/clean_data/df.mab.ssa.csv", row.names = F)
+}
+
+# colnames <- as.data.frame(colnames(df))
+# write.csv(colnames, "../../data/clean_data/dictionary.csv", row.names = F)
+
+```
 
 
 
