@@ -24,6 +24,7 @@ library(stringr)
 library(flextable)
 library(lubridate)
 library(rjags)
+library(tidybayes)
 
 
 library(gtsummary) # for table 1
@@ -37,7 +38,9 @@ source("utils_mAb_VE.R")
 source("jags_waning.R")
 
 rerun <- FALSE
-savenewplot <- TRUE
+savenewplot <- FALSE
+
+set.seed(123)
 ```
 
 
@@ -73,965 +76,59 @@ df <- df %>%
   mutate(cf_month_tested_1 = ifelse(cf_month_tested == 1, 1, 0),
          cf_month_tested_2 = ifelse(cf_month_tested == 2, 1, 0),
          cf_month_tested_3 = ifelse(cf_month_tested == 3, 1, 0),
-         cf_month_tested_4 = ifelse(cf_month_tested == 4, 1, 0))
+         cf_month_tested_4 = ifelse(cf_month_tested == 4, 1, 0)) %>%
+  mutate(cf_insurance_1 = ifelse(insurance_type == "private", 1, 0),
+         cf_insurance_2 = ifelse(insurance_type == "public", 1, 0),
+         cf_insurance_3 = ifelse(insurance_type == "uninsured", 1, 0)) %>%
+  # having at least one risk factor
+  mutate(cf_onerf = ifelse(risk_factor_atleastone == "yes", 1, 0))
 ```
 
 <br>
 
-### VE over time by **1-month** interval {.tabset}
+### Use the same set of confounders as in the main analysis
+
+```{r echo = T}
+confounders_infection <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat"
+)
+
+confounders_ed <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat"
+)
+
+confounders_inpatient <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
+
+confounders_severe <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
+
+confounders_LRTI <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
+
+confounders_LRTIhosp <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
 
-  * classify time since vax to testing into three groups: 0-1, 1-2, 2-3, 3-4 and >4 months
-  * included confounders: age tested, month tested.
-  * uninformative prior for precision of the non-negative increment d's.
-    + d ~ dnorm(0, tau)T(0,)
-    + tau_d ~ dgamma(0.01, 0.01)
-    
-#### Table
-```{r}
-source("jags_waning.R")
-
-df <- df %>%
-  # vax time groups 
-  mutate(vax_time_group1 = ifelse(days_btw_mab_collection_cat_3 == "0-1 months", 1, 0)) %>%
-  mutate(vax_time_group2 = ifelse(days_btw_mab_collection_cat_3 == "1-2 months", 1, 0)) %>%
-  mutate(vax_time_group3 = ifelse(days_btw_mab_collection_cat_3 == "2-3 months", 1, 0)) %>%
-  mutate(vax_time_group4 = ifelse(days_btw_mab_collection_cat_3 == "3-4 months", 1, 0)) %>%
-  mutate(vax_time_group5 = ifelse(days_btw_mab_collection_cat_3 == "4 months +", 1, 0))
-
-###################################
-# Against RSV infection 
-###################################
-
-# prepare the input dataset for jags 
-df.jags <- df %>% mutate(case_control = positive_rsv) 
-
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-  
-
-dataset_1monthinterval_infection <- 
-            list(
-                N_records = nrow(df.jags),
-                vax = df.jags$rsv_mab,
-                vax_time_group1 = df.jags$vax_time_group1,
-                vax_time_group2 = df.jags$vax_time_group2,
-                vax_time_group3 = df.jags$vax_time_group3,
-                vax_time_group4 = df.jags$vax_time_group4,
-                vax_time_group5 = df.jags$vax_time_group5,
-                case_status = df.jags$case_control,
-                # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
-                )
-
-source("jags_waning.R")
-
-if(rerun){
-  
-  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
-                          data = dataset_1monthinterval_infection,
-                          n.chains = 3)
-
-  samples <- rjags::coda.samples(jags.post, 
-                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
-                          n.iter = 5000)
-  saveRDS(samples, "../data/jags/post/wane_1monthinterval_infection.rds")
-
-}else{
-  samples <- readRDS("../data/jags/post/wane_1monthinterval_infection.rds")
-}
-
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
-post <- bind_rows(post1, post2, post3)
-
-ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
-ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
-ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
-
-ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
-ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
-ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
-
-ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
-ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
-ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
-
-ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
-ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
-ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
-
-ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
-ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
-ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
-
-# look at the result
-ve.1monthinterval.infection <- 
-  data.frame(
-  against = rep("RSV infection", 6),
-  vax_time = c("not vaccinated",
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.adjusted = c(
-    "REF",
-    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
-    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
-    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
-    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
-    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
-  )
-) %>% 
-  cbind(
-    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
-      matrix(ncol = 2)
-  ) %>%
-  dplyr::rename(n_cases = `2`, n_controls = `1`)
-  
-# for plotting 
-df.ve.1monthinterval.infection <- 
-  data.frame(
-  against = rep("RSV infection", 5),
-  vax_time = c(
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
-  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
-  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
-  )
-
-
-
-# 
-# plot(samples[, "beta1"])
-# title("beta1")
-# plot(samples[, "beta2"])
-# title("beta2")
-# plot(samples[, "beta3"])
-# title("beta3")
-# plot(samples[, "beta4"])
-# title("beta4")
-# plot(samples[, "beta5"])
-# title("beta5")
-
-
-###################################
-# Against RSV LRTI
-###################################
-
-# prepare the input dataset for jags 
-df.jags <- df %>% 
-  filter(symp_LRT_distress == 1) %>%
-  mutate(case_control = positive_rsv)
-
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-
-
-dataset_1monthinterval_RSVLRTI <- 
-            list(
-                N_records = nrow(df.jags),
-                vax = df.jags$rsv_mab,
-                vax_time_group1 = df.jags$vax_time_group1,
-                vax_time_group2 = df.jags$vax_time_group2,
-                vax_time_group3 = df.jags$vax_time_group3,
-                vax_time_group4 = df.jags$vax_time_group4,
-                vax_time_group5 = df.jags$vax_time_group5,
-                case_status = df.jags$case_control,
-                # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
-                )
-
-source("jags_waning.R")
-
-if(rerun){
-  
-  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
-                          data = dataset_1monthinterval_RSVLRTI,
-                          n.chains = 3)
-
-  samples <- rjags::coda.samples(jags.post, 
-                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
-                          n.iter = 5000)
-  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVLRTI.rds")
-
-}else{
-  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVLRTI.rds")
-}
-
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
-post <- bind_rows(post1, post2, post3)
-
-ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
-ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
-ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
-
-ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
-ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
-ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
-
-ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
-ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
-ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
-
-ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
-ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
-ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
-
-ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
-ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
-ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
-
-# look at the result
-ve.1monthinterval.RSVLRTI <- 
-  data.frame(
-  against = rep("RSV LRTI", 6),
-  vax_time = c("not vaccinated",
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.adjusted = c(
-    "REF",
-    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
-    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
-    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
-    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
-    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
-  )
-) %>% 
-  cbind(
-    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
-      matrix(ncol = 2)
-  ) %>%
-  dplyr::rename(n_cases = `2`, n_controls = `1`)
-  
-
-# for plotting 
-df.ve.1monthinterval.RSVLRTI <- 
-  data.frame(
-  against = rep("RSV LRTI", 5),
-  vax_time = c(
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
-  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
-  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
-  )
-
-###################################
-# Against RSV outpatient visit
-###################################
-
-# prepare the input dataset for jags 
-df.jags <- df %>% 
-  filter(encounter_type == "outpatient") %>%
-  mutate(case_control = positive_rsv)
-
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-
-dataset_1monthinterval_RSVoutpatient <- 
-            list(
-                N_records = nrow(df.jags),
-                vax = df.jags$rsv_mab,
-                vax_time_group1 = df.jags$vax_time_group1,
-                vax_time_group2 = df.jags$vax_time_group2,
-                vax_time_group3 = df.jags$vax_time_group3,
-                vax_time_group4 = df.jags$vax_time_group4,
-                vax_time_group5 = df.jags$vax_time_group5,
-                case_status = df.jags$case_control,
-                # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
-                )
-
-source("jags_waning.R")
-
-if(rerun){
-  
-  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
-                          data = dataset_1monthinterval_RSVoutpatient,
-                          n.chains = 3)
-
-  samples <- rjags::coda.samples(jags.post, 
-                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
-                          n.iter = 5000)
-  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVoutpatient.rds")
-
-}else{
-  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVoutpatient.rds")
-}
-
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
-post <- bind_rows(post1, post2, post3)
-
-ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
-ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
-ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
-
-ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
-ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
-ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
-
-ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
-ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
-ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
-
-ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
-ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
-ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
-
-ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
-ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
-ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
-
-# look at the result
-ve.1monthinterval.RSVoutpatient <- 
-  data.frame(
-  against = rep("RSV outpatient visit", 6),
-  vax_time = c("not vaccinated",
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.adjusted = c(
-    "REF",
-    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
-    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
-    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
-    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
-    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
-  )
-) %>% 
-  cbind(
-    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
-      matrix(ncol = 2)
-  ) %>%
-  dplyr::rename(n_cases = `2`, n_controls = `1`)
-
-# for plotting 
-df.ve.1monthinterval.RSVoutpatient <- 
-  data.frame(
-  against = rep("RSV outpatient visit", 5),
-  vax_time = c(
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
-  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
-  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
-  )
-
-
-
-
-###################################
-# Against RSV hosp
-###################################
-
-# prepare the input dataset for jags 
-df.jags <- df %>% 
-  filter(encounter_type == "inpatient") %>%
-  mutate(case_control = positive_rsv)
-
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-
-dataset_1monthinterval_RSVhosp <- 
-            list(
-                N_records = nrow(df.jags),
-                vax = df.jags$rsv_mab,
-                vax_time_group1 = df.jags$vax_time_group1,
-                vax_time_group2 = df.jags$vax_time_group2,
-                vax_time_group3 = df.jags$vax_time_group3,
-                vax_time_group4 = df.jags$vax_time_group4,
-                vax_time_group5 = df.jags$vax_time_group5,
-                case_status = df.jags$case_control,
-                # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
-                )
-
-source("jags_waning.R")
-
-if(rerun){
-  
-  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
-                          data = dataset_1monthinterval_RSVhosp,
-                          n.chains = 3)
-
-  samples <- rjags::coda.samples(jags.post, 
-                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
-                          n.iter = 5000)
-  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVhosp.rds")
-
-}else{
-  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVhosp.rds")
-}
-
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
-post <- bind_rows(post1, post2, post3)
-
-ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
-ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
-ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
-
-ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
-ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
-ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
-
-ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
-ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
-ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
-
-ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
-ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
-ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
-
-ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
-ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
-ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
-
-# look at the result
-ve.1monthinterval.RSVhosp <- 
-  data.frame(
-  against = rep("RSV hospitalization", 6),
-  vax_time = c("not vaccinated",
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.adjusted = c(
-    "REF",
-    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
-    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
-    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
-    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
-    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
-  )
-) %>% 
-  cbind(
-    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
-      matrix(ncol = 2)
-  ) %>%
-  dplyr::rename(n_cases = `2`, n_controls = `1`)
-
-# for plotting 
-df.ve.1monthinterval.RSVhosp <- 
-  data.frame(
-  against = rep("RSV hospitalization", 5),
-  vax_time = c(
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
-  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
-  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
-  )
-
-###################################
-# Against RSV LRTI hosp
-###################################
-
-# prepare the input dataset for jags 
-df.jags <- df %>% 
-  filter(encounter_type == "inpatient" & symp_LRT_distress == 1) %>%
-  mutate(case_control = positive_rsv)
-
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-
-dataset_1monthinterval_RSVLRTIhosp <- 
-            list(
-                N_records = nrow(df.jags),
-                vax = df.jags$rsv_mab,
-                vax_time_group1 = df.jags$vax_time_group1,
-                vax_time_group2 = df.jags$vax_time_group2,
-                vax_time_group3 = df.jags$vax_time_group3,
-                vax_time_group4 = df.jags$vax_time_group4,
-                vax_time_group5 = df.jags$vax_time_group5,
-                case_status = df.jags$case_control,
-                # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
-                )
-
-source("jags_waning.R")
-
-if(rerun){
-  
-  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
-                          data = dataset_1monthinterval_RSVLRTIhosp,
-                          n.chains = 3)
-
-  samples <- rjags::coda.samples(jags.post, 
-                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
-                          n.iter = 5000)
-  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVLRTIhosp.rds")
-
-}else{
-  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVLRTIhosp.rds")
-}
-
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
-post <- bind_rows(post1, post2, post3)
-
-ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
-ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
-ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
-
-ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
-ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
-ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
-
-ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
-ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
-ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
-
-ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
-ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
-ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
-
-ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
-ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
-ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
-
-# look at the result
-ve.1monthinterval.RSVLRTIhosp <- 
-  data.frame(
-  against = rep("RSV LRTI hospitalization", 6),
-  vax_time = c("not vaccinated",
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.adjusted = c(
-    "REF",
-    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
-    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
-    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
-    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
-    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
-  )
-) %>% 
-  cbind(
-    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
-      matrix(ncol = 2)
-  ) %>%
-  dplyr::rename(n_cases = `2`, n_controls = `1`)
-
-# for plotting 
-df.ve.1monthinterval.RSVLRTIhosp <- 
-  data.frame(
-  against = rep("RSV LRTI hospitalization", 5),
-  vax_time = c(
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
-  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
-  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
-  )
-
-
-###################################
-# Against RSV severe outcomes
-###################################
-
-# prepare the input dataset for jags 
-df.jags <- df %>% 
-  filter(icu_admitted == "yes" | highflow_oxygen == 1) %>%
-  mutate(case_control = positive_rsv)
-
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-
-dataset_1monthinterval_RSVsevere <- 
-            list(
-                N_records = nrow(df.jags),
-                vax = df.jags$rsv_mab,
-                vax_time_group1 = df.jags$vax_time_group1,
-                vax_time_group2 = df.jags$vax_time_group2,
-                vax_time_group3 = df.jags$vax_time_group3,
-                vax_time_group4 = df.jags$vax_time_group4,
-                vax_time_group5 = df.jags$vax_time_group5,
-                case_status = df.jags$case_control,
-                # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
-                )
-
-source("jags_waning.R")
-
-if(rerun){
-  
-  jags.post <- rjags::jags.model(textConnection(model_string_waning_1monthinterval), 
-                          data = dataset_1monthinterval_RSVsevere,
-                          n.chains = 3)
-
-  samples <- rjags::coda.samples(jags.post, 
-                          variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5"),
-                          n.iter = 5000)
-  saveRDS(samples, "../data/jags/post/wane_1monthinterval_RSVsevere.rds")
-
-}else{
-  samples <- readRDS("../data/jags/post/wane_1monthinterval_RSVsevere.rds")
-}
-
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
-post <- bind_rows(post1, post2, post3)
-
-ve.median.0_1m <- round((1 - exp(median(post$beta1)))*100,1)
-ve.lb.0_1m <- round((1 - exp(quantile(post$beta1, 0.975))) *100,1)
-ve.ub.0_1m <- round((1 - exp(quantile(post$beta1, 0.025)))*100, 1)
-
-ve.median.1_2m <- round((1 - exp(median(post$beta2)))*100,1)
-ve.lb.1_2m <- round((1 - exp(quantile(post$beta2, 0.975))) *100,1)
-ve.ub.1_2m <- round((1 - exp(quantile(post$beta2, 0.025)))*100, 1)
-
-ve.median.2_3m <- round((1 - exp(median(post$beta3)))*100,1)
-ve.lb.2_3m <- round((1 - exp(quantile(post$beta3, 0.975))) *100,1)
-ve.ub.2_3m <- round((1 - exp(quantile(post$beta3, 0.025)))*100, 1)
-
-ve.median.3_4m <- round((1 - exp(median(post$beta4)))*100,1)
-ve.lb.3_4m <- round((1 - exp(quantile(post$beta4, 0.975))) *100,1)
-ve.ub.3_4m <- round((1 - exp(quantile(post$beta4, 0.025)))*100, 1)
-
-ve.median.4m <- round((1 - exp(median(post$beta5)))*100,1)
-ve.lb.4m <- round((1 - exp(quantile(post$beta5, 0.975))) *100,1)
-ve.ub.4m <- round((1 - exp(quantile(post$beta5, 0.025)))*100, 1)
-
-# look at the result
-ve.1monthinterval.RSVsevere <- 
-  data.frame(
-  against = rep("RSV severe outcomes", 6),
-  vax_time = c("not vaccinated",
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.adjusted = c(
-    "REF",
-    paste0(ve.median.0_1m, " (", ve.lb.0_1m, "-", ve.ub.0_1m, ")"),
-    paste0(ve.median.1_2m, " (", ve.lb.1_2m, "-", ve.ub.1_2m, ")"),
-    paste0(ve.median.2_3m, " (", ve.lb.2_3m, "-", ve.ub.2_3m, ")"),
-    paste0(ve.median.3_4m, " (", ve.lb.3_4m, "-", ve.ub.3_4m, ")"),
-    paste0(ve.median.4m, " (", ve.lb.4m, "-", ve.ub.4m, ")")
-  )
-) %>% 
-  cbind(
-    table(df.jags$days_btw_mab_collection_cat_3, df.jags$case_control) %>%
-      matrix(ncol = 2)
-  ) %>%
-  dplyr::rename(n_cases = `2`, n_controls = `1`)
-
-# for plotting 
-df.ve.1monthinterval.RSVsevere <- 
-  data.frame(
-  against = rep("RSV severe outcomes", 5),
-  vax_time = c(
-               "vaccinated 0-1 months ago",
-               "vaccinated 1-2 months ago",
-               "vaccinated 2-3 months ago",
-               "vaccinated 3-4 months ago",
-               "vaccinated 4+ months ago"),
-  VE.median = c(ve.median.0_1m, ve.median.1_2m, ve.median.2_3m, ve.median.3_4m, ve.median.4m),
-  VE.lb = c(ve.lb.0_1m, ve.lb.1_2m, ve.lb.2_3m, ve.lb.3_4m, ve.lb.4m),
-  VE.ub = c(ve.ub.0_1m, ve.ub.1_2m, ve.ub.2_3m, ve.ub.3_4m, ve.ub.4m)
-  )
-
-
-
-  
-
-# look at all the results with 1-month interval
-ve.1monthinterval.infection %>%
-  rbind(ve.1monthinterval.RSVoutpatient, 
-        ve.1monthinterval.RSVhosp,
-        ve.1monthinterval.RSVLRTI, 
-        ve.1monthinterval.RSVLRTIhosp,
-        ve.1monthinterval.RSVsevere) %>% 
-  reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"), 
-            defaultExpanded = T, groupBy = "against") 
-
-# save the data table 
-tab.ve.wane.1m <- 
-  ve.1monthinterval.infection %>%
-  rbind(ve.1monthinterval.RSVoutpatient, 
-        ve.1monthinterval.RSVhosp,
-        ve.1monthinterval.RSVLRTI, 
-        ve.1monthinterval.RSVLRTIhosp,
-        ve.1monthinterval.RSVsevere) %>%
-  mutate(vax_time = case_when(vax_time == "not vaccinated" ~ "Not vaccinated",
-                                    vax_time == "vaccinated 0-1 months ago" ~ "(0, 1)",
-                                    vax_time == "vaccinated 1-2 months ago" ~ "[1, 2)", 
-                                    vax_time == "vaccinated 2-3 months ago" ~ "[2, 3)", 
-                                    vax_time == "vaccinated 3-4 months ago" ~ "[3, 4)", 
-                                    vax_time == "vaccinated 4+ months ago" ~ "[4, )")) %>%
-  dplyr::select(against, vax_time, n_cases, n_controls, VE.adjusted) %>%
-  flextable() %>%
-  set_header_labels(against = "Outcome prevented",
-                    vax_time = "Time since vaccination (months)",
-                    n_cases = "RSV positive",
-                    n_controls = "RSV negative",
-                    VE.adjusted = "Adjusted VE (95% CI)"
-                    ) %>%
-  merge_at(i = 1:6, j = 1) %>%
-  merge_at(i = 7:12, j = 1) %>%
-  merge_at(i = 13:18, j = 1) %>%
-  merge_at(i = 19:24, j = 1) %>%
-  merge_at(i = 25:30, j = 1) %>%
-  width(j = c(1,2,5), width = 2) %>%
-  vline() %>%
-  hline()
-
-if(savenewplot){
-  save_as_docx(tab.ve.wane.1m, path = "../figs_tabs/tables/jags.wane.1m.docx")
-}
-  
-```
-
-#### waning figure, showing full CIs
-```{r fig.width = 12, fig.height = 4}
-df.plt.wane <- 
-  df.ve.1monthinterval.infection %>%
-  rbind(df.ve.1monthinterval.RSVoutpatient, 
-        df.ve.1monthinterval.RSVhosp,
-        df.ve.1monthinterval.RSVLRTI, 
-        df.ve.1monthinterval.RSVLRTIhosp,
-        df.ve.1monthinterval.RSVsevere) %>% 
-  mutate(time_since_vax = case_when(vax_time == "vaccinated 0-1 months ago" ~ "1",
-                                    vax_time == "vaccinated 1-2 months ago" ~ "2", 
-                                    vax_time == "vaccinated 2-3 months ago" ~ "3", 
-                                    vax_time == "vaccinated 3-4 months ago" ~ "4", 
-                                    vax_time == "vaccinated 4+ months ago" ~ "4+")) %>%
-  mutate(VE = paste0(round(VE.median), " (", round(VE.lb), ", ", round(VE.ub), ")")) %>% 
-  mutate(time_since_vax = factor(time_since_vax, levels = c("1", "2","3","4","4+"))) %>% 
-  mutate(against = paste0("Against ", against)) %>%
-  mutate(against = factor(against, levels = c("Against RSV infection",
-                                              "Against RSV outpatient visit",
-                                              "Against RSV hospitalization",
-                                              "Against RSV LRTI",
-                                              "Against RSV LRTI hospitalization",
-                                              "Against RSV severe outcomes")))
-
-df.plt.wane %>%
-  ggplot() +
-  geom_point(aes(x = time_since_vax, y = VE.median, color = against), 
-             position = position_dodge(0.5)) +
-  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub, color = against), 
-                width = 0, position = position_dodge(0.5)) +
-  geom_text(aes(x = time_since_vax, y = VE.median, color = against, label = VE), 
-            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
-            size = 2.5) +
-  theme_classic() +
-  scale_color_brewer(palette = "Dark2") +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  ylab("Effectiveness of Nirsevimab (%)") +
-  xlab("Time since vaccination (months)") +
-  labs(color = "Clinical endpoint")
-
-```
-
-#### Waning figure, showing partial CIs
-```{r fig.width = 12, fig.height = 4}
-df.no.arrow <- 
-  df.plt.wane %>%
-  mutate(add_arrow = ifelse(VE.lb <= -25, 1, 0)) %>%
-  mutate(VE.lb = ifelse(add_arrow == 1, -25, VE.lb)) %>% 
-  mutate(across(starts_with("VE"), ~ ifelse(add_arrow == 1, NA, .)))
-
-df.add.arrow <- 
-  df.plt.wane %>%
-  mutate(add_arrow = ifelse(VE.lb <= -25, 1, 0)) %>%
-  mutate(VE.lb = ifelse(add_arrow == 1, -25, VE.lb)) %>% 
-  mutate(across(starts_with("VE"), ~ ifelse(add_arrow != 1, NA, .)))
-
-# adjusted arrows to parallel
-# https://stackoverflow.com/questions/67853990/geom-segment-parallel-dodging
-space_between_bars <- 0.145
-df.add.arrow$against_x_adj = scale(as.numeric(as.factor(df.add.arrow$against))) * space_between_bars
-df.add.arrow$x = as.numeric(as.factor(df.add.arrow$time_since_vax)) + df.add.arrow$against_x_adj
-
-
-ggplot() +
-  # if lb > -25
-  geom_point(aes(x = time_since_vax, y = VE.median, color = against), 
-             position = position_dodge(0.5), data = df.no.arrow) +
-  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub, color = against), 
-                width = 0, position = position_dodge(0.5), data = df.no.arrow) +
-  geom_text(aes(x = time_since_vax, y = VE.median, color = against, label = VE), 
-            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
-            size = 3, data = df.no.arrow) +
-  # if lb < -25
-  geom_point(aes(x = time_since_vax, y = VE.median, color = against), 
-             position = position_dodge(0.5), data = df.add.arrow) +
-  geom_segment(aes(x = x, xend = x, 
-                   y = VE.ub, yend = VE.lb, color = against),
-               arrow = arrow(length = unit(2, "mm")),
-               position = position_dodge(0.5),
-               data = df.add.arrow, show_guide = F) +
-  geom_text(aes(x = time_since_vax, y = VE.median, color = against, label = VE), 
-            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
-            size = 3, data = df.add.arrow) +
-  theme_classic() +
-  scale_color_brewer(palette = "Dark2") +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  ylab("Effectiveness of Nirsevimab (%)") +
-  xlab("Time since vaccination (months)") +
-  labs(color = "Clinical endpoint") +
-  ylim(c(-25,100))  +
-  scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
-                     labels = c("-25", "0", "25", "50", "75", "100"))
-```
-
-#### one outcome per panel
-```{r fig.width = 9, fig.height = 6}
-plt.jags.wane.1m <- 
-  ggplot() +
-  # if lb > -25
-  geom_point(aes(x = time_since_vax, y = VE.median), 
-             position = position_dodge(0.5), data = df.no.arrow) +
-  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub), 
-                width = 0, position = position_dodge(0.5), data = df.no.arrow) +
-  geom_text(aes(x = time_since_vax, y = VE.median-10, label = VE), 
-            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
-            size = 4, data = df.no.arrow) +
-  # if lb < -25
-  geom_point(aes(x = time_since_vax, y = VE.median), 
-             position = position_dodge(0.5), data = df.add.arrow) +
-  geom_segment(aes(x = time_since_vax, xend = time_since_vax, 
-                   y = VE.ub, yend = VE.lb),
-               arrow = arrow(length = unit(2, "mm")),
-               position = position_dodge(0.5),
-               data = df.add.arrow, show_guide = F) +
-  geom_text(aes(x = time_since_vax, y = (VE.ub+30)/2, label = VE), 
-            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
-            size = 4, data = df.add.arrow) +
-  theme_classic() +
-  scale_color_brewer(palette = "Dark2") +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  ylab("Effectiveness of Nirsevimab (%)") +
-  xlab("Time since vaccination (months)") +
-  labs(color = "Clinical endpoint") +
-  ylim(c(-25,100)) +
-  scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
-                     labels = c("-25", "0", "25", "50", "75", "100")) +
-  facet_wrap( ~ against) +
-   theme(
-    #panel.grid.major = element_line(color = "grey", linewidth = 0.1), 
-    #panel.grid.minor = element_blank(),
-    axis.text.x = element_text(size = 12),
-    axis.title.x = element_text(size = 14),
-    axis.title.y = element_text(size = 14),
-    strip.text.x = element_text(size = 12), 
-        strip.text.y = element_text(size = 11)
-     )
-        
-
-plt.jags.wane.1m
-
-if(savenewplot){
-  ggsave(plot = plt.jags.wane.1m, filename = "../figs_tabs/figures/jags.wane.1m.pdf", height = 6, width = 9)
-}
 ```
 
 <br>
 
 
-### VE over time by **biweek** interval {.tabset}
+### VE over time by **biweek** interval with imposed monotonic trend {.tabset}
 
   * classify time since vax to testing by biweek interval.
   * included confounders : age tested, month tested
@@ -1062,10 +159,9 @@ df <- df %>%
 # prepare the input dataset for jags 
 df.jags <- df %>% mutate(case_control = positive_rsv) 
 
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-  
+
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3) %>% as.matrix()
 
 dataset_biwkinterval_infection <- 
             list(
@@ -1082,17 +178,8 @@ dataset_biwkinterval_infection <-
                 vax_time_group9 = df.jags$vax_time_group9,
                 case_status = df.jags$case_control,
                 # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
 
 source("jags_waning.R")
@@ -1102,20 +189,25 @@ if(rerun){
   jags.post <- rjags::jags.model(textConnection(model_string_waning_biwkinterval), 
                           data = dataset_biwkinterval_infection,
                           n.chains = 3)
-
+  
   samples <- rjags::coda.samples(jags.post, 
                           variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
                                            "beta7", "beta8", "beta9"),
-                          n.iter = 5000)
+                          n.iter = 60000)
   saveRDS(samples, "../data/jags/post/wane_biwkinterval_infection.rds")
 
 }else{
   samples <- readRDS("../data/jags/post/wane_biwkinterval_infection.rds")
 }
 
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+# post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:9000),]))  
+# post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:9000),])) 
+# post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:9000),])) 
+# post <- bind_rows(post1, post2, post3)
+
+post1 <- as.data.frame(as.matrix(samples[[1]]))  
+post2 <- as.data.frame(as.matrix(samples[[2]])) 
+post3 <- as.data.frame(as.matrix(samples[[3]])) 
 post <- bind_rows(post1, post2, post3)
 
 ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
@@ -1208,6 +300,13 @@ df.ve.biwkinterval.infection <-
             ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
   )
 
+# for traceplot 
+post.infection <- rbind(
+  post1 %>% mutate(chain = 1, iter = 1:60000), 
+  post2 %>% mutate(chain = 2, iter = 1:60000),
+  post3 %>% mutate(chain = 3, iter = 1:60000)
+) %>% 
+  mutate(outcome = "Medically attended RSV infection")
 
 
 # 
@@ -1225,9 +324,9 @@ df.jags <- df %>%
   filter(symp_LRT_distress == 1) %>%
   mutate(case_control = positive_rsv) 
 
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
   
 
 dataset_biwkinterval_RSVLRTI <- 
@@ -1245,17 +344,8 @@ dataset_biwkinterval_RSVLRTI <-
                 vax_time_group9 = df.jags$vax_time_group9,
                 case_status = df.jags$case_control,
                 # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
 
 source("jags_waning.R")
@@ -1269,16 +359,21 @@ if(rerun){
   samples <- rjags::coda.samples(jags.post, 
                           variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
                                            "beta7", "beta8", "beta9"),
-                          n.iter = 5000)
+                          n.iter = 60000)
   saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVLRTI.rds")
 
 }else{
   samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVLRTI.rds")
 }
 
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+# post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+# post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+# post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+# post <- bind_rows(post1, post2, post3)
+
+post1 <- as.data.frame(as.matrix(samples[[1]]))  
+post2 <- as.data.frame(as.matrix(samples[[2]])) 
+post3 <- as.data.frame(as.matrix(samples[[3]])) 
 post <- bind_rows(post1, post2, post3)
 
 ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
@@ -1372,6 +467,16 @@ df.ve.biwkinterval.RSVLRTI <-
   )
 
 
+# for traceplot 
+post.RSVLRTI <- rbind(
+  post1 %>% mutate(chain = 1, iter = 1:60000), 
+  post2 %>% mutate(chain = 2, iter = 1:60000),
+  post3 %>% mutate(chain = 3, iter = 1:60000)
+) %>% 
+  mutate(outcome = "RSV-associated LRTI")
+
+
+
 ###################################
 # Against RSV outpatient visit
 ###################################
@@ -1380,10 +485,9 @@ df.jags <- df %>%
   filter(encounter_type == "outpatient") %>%
   mutate(case_control = positive_rsv) 
 
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-  
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3) %>% as.matrix()
+
 
 dataset_biwkinterval_RSVoutpatient <- 
             list(
@@ -1400,17 +504,8 @@ dataset_biwkinterval_RSVoutpatient <-
                 vax_time_group9 = df.jags$vax_time_group9,
                 case_status = df.jags$case_control,
                 # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
 
 source("jags_waning.R")
@@ -1424,16 +519,21 @@ if(rerun){
   samples <- rjags::coda.samples(jags.post, 
                           variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
                                            "beta7", "beta8", "beta9"),
-                          n.iter = 5000)
+                          n.iter = 60000)
   saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVoutpatient.rds")
 
 }else{
   samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVoutpatient.rds")
 }
 
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+# post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
+# post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
+# post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+# post <- bind_rows(post1, post2, post3)
+
+post1 <- as.data.frame(as.matrix(samples[[1]]))  
+post2 <- as.data.frame(as.matrix(samples[[2]])) 
+post3 <- as.data.frame(as.matrix(samples[[3]])) 
 post <- bind_rows(post1, post2, post3)
 
 ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
@@ -1526,6 +626,16 @@ df.ve.biwkinterval.RSVoutpatient <-
             ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
   )
 
+# for traceplot 
+post.outpatient <- rbind(
+  post1 %>% mutate(chain = 1, iter = 1:60000), 
+  post2 %>% mutate(chain = 2, iter = 1:60000),
+  post3 %>% mutate(chain = 3, iter = 1:60000)
+) %>% 
+  mutate(outcome = "RSV-associated outpatient visit")
+
+
+
 ###################################
 # Against RSV hosp
 ###################################
@@ -1535,10 +645,10 @@ df.jags <- df %>%
   filter(encounter_type == "inpatient") %>%
   mutate(case_control = positive_rsv) 
 
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-  
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
+
 
 dataset_biwkinterval_RSVhosp <- 
             list(
@@ -1555,17 +665,8 @@ dataset_biwkinterval_RSVhosp <-
                 vax_time_group9 = df.jags$vax_time_group9,
                 case_status = df.jags$case_control,
                 # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
 
 source("jags_waning.R")
@@ -1579,16 +680,16 @@ if(rerun){
   samples <- rjags::coda.samples(jags.post, 
                           variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
                                            "beta7", "beta8", "beta9"),
-                          n.iter = 5000)
+                          n.iter = 60000)
   saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVhosp.rds")
 
 }else{
   samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVhosp.rds")
 }
 
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post1 <- as.data.frame(as.matrix(samples[[1]]))  
+post2 <- as.data.frame(as.matrix(samples[[2]])) 
+post3 <- as.data.frame(as.matrix(samples[[3]])) 
 post <- bind_rows(post1, post2, post3)
 
 ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
@@ -1681,6 +782,16 @@ df.ve.biwkinterval.RSVhosp <-
             ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
   )
 
+# for traceplot 
+post.RSVhosp <- rbind(
+  post1 %>% mutate(chain = 1, iter = 1:60000), 
+  post2 %>% mutate(chain = 2, iter = 1:60000),
+  post3 %>% mutate(chain = 3, iter = 1:60000)
+) %>% 
+  mutate(outcome = "RSV-associated hospitalization")
+
+
+
 ###################################
 # Against RSV LRTI hosp
 ###################################
@@ -1689,10 +800,9 @@ df.jags <- df %>%
   filter(symp_LRT_distress == 1 & encounter_type == "inpatient") %>%
   mutate(case_control = positive_rsv) 
 
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-  
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
 
 dataset_biwkinterval_RSVLRTIhosp <- 
             list(
@@ -1709,17 +819,8 @@ dataset_biwkinterval_RSVLRTIhosp <-
                 vax_time_group9 = df.jags$vax_time_group9,
                 case_status = df.jags$case_control,
                 # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
 
 source("jags_waning.R")
@@ -1733,16 +834,16 @@ if(rerun){
   samples <- rjags::coda.samples(jags.post, 
                           variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
                                            "beta7", "beta8", "beta9"),
-                          n.iter = 5000)
+                          n.iter = 60000)
   saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVLRTIhosp.rds")
 
 }else{
   samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVLRTIhosp.rds")
 }
 
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post1 <- as.data.frame(as.matrix(samples[[1]]))  
+post2 <- as.data.frame(as.matrix(samples[[2]])) 
+post3 <- as.data.frame(as.matrix(samples[[3]])) 
 post <- bind_rows(post1, post2, post3)
 
 ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
@@ -1835,6 +936,16 @@ df.ve.biwkinterval.RSVLRTIhosp<-
             ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
   )
 
+# for traceplot 
+post.RSVLRTIhosp <- rbind(
+  post1 %>% mutate(chain = 1, iter = 1:60000), 
+  post2 %>% mutate(chain = 2, iter = 1:60000),
+  post3 %>% mutate(chain = 3, iter = 1:60000)
+) %>% 
+  mutate(outcome = "RSV-associated LRTI hospitalization")
+
+
+
 ###################################
 # Against RSV severe outcomes
 ###################################
@@ -1843,10 +954,10 @@ df.jags <- df %>%
   filter(icu_admitted == "yes" | highflow_oxygen == 1) %>%
   mutate(case_control = positive_rsv) 
 
-# # include birth weight and gestage<37wks as confounders 
-# df.jags <- df.jags %>%
-#   filter(!is.na(cf_birth_weight) & !is.na(risk_factor_gestagelessthan37wks))
-  
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
+
 
 dataset_biwkinterval_RSVsevere <- 
             list(
@@ -1863,17 +974,8 @@ dataset_biwkinterval_RSVsevere <-
                 vax_time_group9 = df.jags$vax_time_group9,
                 case_status = df.jags$case_control,
                 # confounders
-                cf_birth_weight = df.jags$birth_weight,
-                cf_gestage = df.jags$risk_factor_gestagelessthan37wks,
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
 
 source("jags_waning.R")
@@ -1887,16 +989,16 @@ if(rerun){
   samples <- rjags::coda.samples(jags.post, 
                           variable.names=c("beta1", "beta2", "beta3", "beta4", "beta5", "beta6",
                                            "beta7", "beta8", "beta9"),
-                          n.iter = 5000)
+                          n.iter = 60000)
   saveRDS(samples, "../data/jags/post/wane_biwkinterval_RSVsevere.rds")
 
 }else{
   samples <- readRDS("../data/jags/post/wane_biwkinterval_RSVsevere.rds")
 }
 
-post1 <- as.data.frame(as.matrix(samples[[1]][-c(1:4500),]))  
-post2 <- as.data.frame(as.matrix(samples[[2]][-c(1:4500),])) 
-post3 <- as.data.frame(as.matrix(samples[[3]][-c(1:4500),])) 
+post1 <- as.data.frame(as.matrix(samples[[1]]))  
+post2 <- as.data.frame(as.matrix(samples[[2]])) 
+post3 <- as.data.frame(as.matrix(samples[[3]])) 
 post <- bind_rows(post1, post2, post3)
 
 ve.median.1 <- round((1 - exp(median(post$beta1)))*100,1)
@@ -1989,9 +1091,18 @@ df.ve.biwkinterval.RSVsevere <-
             ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
   )
 
+# for traceplot 
+post.RSVsevere <- rbind(
+  post1 %>% mutate(chain = 1, iter = 1:60000), 
+  post2 %>% mutate(chain = 2, iter = 1:60000),
+  post3 %>% mutate(chain = 3, iter = 1:60000)
+) %>% 
+  mutate(outcome = "RSV-associated severe outcomes")
+
+
   
 
-# look at all the results with 1-month interval
+# look at all the results 
 ve.biwkinterval.infection %>%
   rbind(ve.biwkinterval.RSVoutpatient, 
         ve.biwkinterval.RSVhosp,
@@ -2011,12 +1122,13 @@ tab.ve.wane.biwk <-
         ve.biwkinterval.RSVLRTIhosp,
         ve.biwkinterval.RSVsevere) %>%
   dplyr::select(against, vax_time, n_cases, n_controls, VE.adjusted) %>%
+  mutate(vax_time = ifelse(vax_time == "not vaccinated", "not immunized", vax_time)) %>%
   flextable() %>%
   set_header_labels(against = "Outcome prevented",
-                    vax_time = "Time since vaccination (weeks)",
+                    vax_time = "Time since immunization (weeks)",
                     n_cases = "RSV positive",
                     n_controls = "RSV negative",
-                    VE.adjusted = "Adjusted VE (95% CI)"
+                    VE.adjusted = "Adjusted Effectiveness (95% CI)"
                     ) %>%
   merge_at(i = 1:10, j = 1) %>%
   merge_at(i = 11:20, j = 1) %>%
@@ -2031,11 +1143,16 @@ tab.ve.wane.biwk <-
 if(savenewplot){
   save_as_docx(tab.ve.wane.biwk, path = "../figs_tabs/tables/jags.wane.biwk.docx")
 }
+
+# for traceplot plotting 
+post <- rbind(post.infection, post.outpatient, post.RSVhosp, post.RSVsevere, post.RSVLRTI, post.RSVLRTIhosp)
   
 ```
 
-#### one outcome per panel
 
+#### Visualize the results {.tabset}
+
+#### One endpoint per panel
 ```{r fig.width = 12, fig.height = 8}
 df.plt.wane.biwk <- 
   df.ve.biwkinterval.infection %>%
@@ -2107,7 +1224,7 @@ plt.jags.wane.biwk <-
   scale_color_brewer(palette = "Dark2") +
   geom_hline(yintercept = 0, linetype = "dashed") +
   ylab("Effectiveness of Nirsevimab (%)") +
-  xlab("Time since vaccination (weeks)") +
+  xlab("Time since immunization (weeks)") +
   labs(color = "Clinical endpoint") +
   ylim(c(-25,100)) +
   scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
@@ -2129,13 +1246,187 @@ plt.jags.wane.biwk
 if(savenewplot){
   ggsave(plot = plt.jags.wane.biwk, filename = "../figs_tabs/figures/jags.wane.biwk.pdf", height = 8, width = 12)
 }
+```
+
+
+```{r fig.height=7, fig.width =8}
+# remove LRTI outcomes and only keep the main outcomes 
+df.no.arrow.main <- df.no.arrow %>% filter(against != "Against RSV LRTI" & against != "Against RSV LRTI hospitalization")
+
+df.add.arrow.main <- df.add.arrow %>% filter(against != "Against RSV LRTI" & against != "Against RSV LRTI hospitalization")
+
+
+
+plt.jags.wane.biwk.main <- 
+  ggplot() +
+  # if lb > -25
+  geom_point(aes(x = time_since_vax, y = VE.median), 
+             position = position_dodge(0.5), data = df.no.arrow.main) +
+  geom_errorbar(aes(x = time_since_vax, ymin = VE.lb, ymax = VE.ub), 
+                width = 0, position = position_dodge(0.5), data = df.no.arrow.main) +
+  geom_text(aes(x = time_since_vax, y = VE.median-10, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4.3, data = df.no.arrow.main) +
+  # if lb < -25
+  geom_point(aes(x = time_since_vax, y = VE.median), 
+             position = position_dodge(0.5), data = df.add.arrow.main) +
+  geom_segment(aes(x = time_since_vax, xend = time_since_vax, 
+                   y = VE.ub, yend = VE.lb),
+               arrow = arrow(length = unit(2, "mm")),
+               position = position_dodge(0.5),
+               data = df.add.arrow.main, show_guide = F) +
+  geom_text(aes(x = time_since_vax, y = VE.median-10, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4.3, data = df.add.arrow.main) +
+  theme_classic() +
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Effectiveness of Nirsevimab (%)") +
+  xlab("Time since immunization (weeks)") +
+  labs(color = "Clinical endpoint") +
+  ylim(c(-25,100)) +
+  scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
+                     labels = c("-25", "0", "25", "50", "75", "100")) +
+  facet_wrap( ~ against) +
+   theme(
+    #panel.grid.major = element_line(color = "grey", linewidth = 0.1), 
+    #panel.grid.minor = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    strip.text.x = element_text(size = 12), 
+        strip.text.y = element_text(size = 11)
+     )
+        
+
+plt.jags.wane.biwk.main
+
+if(savenewplot){
+  ggsave(plot = plt.jags.wane.biwk.main, filename = "../figs_tabs/figures/jags.wane.biwk.main.pdf", height = 7, width = 8)
+}
 
 ```
 
 
+#### Overlap VE waning curve from Hodgson et al. 2024 with VE here against corresponding endpoint
+```{r fig.width = 6, fig.height=4}
+# read in the data of waning VE from Hodgson et al. 2024
+ve.hodgson <- read.csv("../data/ve_wane_Hodgson.csv") %>% 
+  filter(waning_dist == "waning_exp") %>%
+  filter(t < 130) 
+
+df.no.arrow.overlay <- df.no.arrow %>% filter(against == "Against RSV LRTI") %>%
+  mutate(vax_time = case_when(vax_time == "(0, 2)" ~ 2*7,
+                              vax_time == "[2, 4)" ~ 4*7,
+                              vax_time == "[4, 6)" ~ 6*7,
+                              vax_time == "[6, 8)" ~ 8*7,
+                              vax_time == "[8, 10)" ~ 10*7,
+                              vax_time == "[10, 12)" ~ 12*7,
+                              vax_time == "[12, 14)" ~ 14*7,
+                              vax_time == "[14, 16)" ~ 16*7,
+                              vax_time == "[16, )" ~ 18*7,
+                              ))
+df.add.arrow.overlay <- df.add.arrow %>% filter(against == "Against RSV LRTI") %>%
+  mutate(vax_time = case_when(vax_time == "(0, 2)" ~ 2*7,
+                              vax_time == "[2, 4)" ~ 4*7,
+                              vax_time == "[4, 6)" ~ 6*7,
+                              vax_time == "[6, 8)" ~ 8*7,
+                              vax_time == "[8, 10)" ~ 10*7,
+                              vax_time == "[10, 12)" ~ 12*7,
+                              vax_time == "[12, 14)" ~ 14*7,
+                              vax_time == "[14, 16)" ~ 16*7,
+                              vax_time == "[16, )" ~ 18*7,
+                              ))
 
 
+plt.jags.wane.overlay <- 
+  ggplot() +
+  ## waning ve from Hodgson et al
+  tidybayes::stat_lineribbon(aes(t, eff*100), color = "forestgreen", fill = "forestgreen",
+                  .width = 0.95, alpha = 0.5, size = 1 , data = ve.hodgson, 
+                  show_guide = F) +
+  ## add estimates from current case control
+  # if lb > -25
+  geom_point(aes(x = vax_time, y = VE.median), 
+             position = position_dodge(0.5), data = df.no.arrow.overlay) +
+  geom_errorbar(aes(x = vax_time, ymin = VE.lb, ymax = VE.ub), 
+                width = 0, position = position_dodge(0.5), data = df.no.arrow.overlay) +
+  geom_text(aes(x = vax_time, y = VE.median-10, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4.3, data = df.no.arrow.overlay) +
+  # if lb < -25
+  geom_point(aes(x = vax_time, y = VE.median), 
+             position = position_dodge(0.5), data = df.add.arrow.overlay) +
+  geom_segment(aes(x = vax_time, xend = vax_time, 
+                   y = VE.ub, yend = VE.lb),
+               arrow = arrow(length = unit(2, "mm")),
+               position = position_dodge(0.5),
+               data = df.add.arrow.overlay, show_guide = F) +
+  geom_text(aes(x = vax_time, y = VE.median-10, label = VE), 
+            angle = 90, position = position_dodge(0.5), vjust = - 0.7, show_guide = F,
+            size = 4.3, data = df.add.arrow.overlay) +
+  theme_classic() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Effectiveness of Nirsevimab \nagainst RSV-associated LRTI (%)") +
+  xlab("Time since immunization (weeks)") +
+  ylim(c(-25,100)) +
+  scale_y_continuous(breaks = c(-25, 0, 25, 50, 75, 100),
+                     labels = c("-25", "0", "25", "50", "75", "100")) +
+  scale_x_continuous(breaks = c(0, 14, 28, 42, 56, 70, 84, 98, 112, 126),
+                     labels = c("0", "2", "4", "6", "8", "10", "12", "14", "16", "16+")) +
+   theme(
+    #panel.grid.major = element_line(color = "grey", linewidth = 0.1), 
+    #panel.grid.minor = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+    strip.text.x = element_text(size = 12), 
+    strip.text.y = element_text(size = 11)
+     )
 
+plt.jags.wane.overlay
+
+if(savenewplot){
+  ggsave(plot = plt.jags.wane.overlay, filename = "../figs_tabs/figures/jags.wane.overlay.pdf", height = 4, width = 6)
+}
+        
+```
+
+#### traceplot 
+```{r, fig.width = 9, fig.height = 9}
+traceplot <- 
+  post %>% 
+  pivot_longer(cols = 1:9, names_to = "beta", values_to = "value") %>%
+  filter(outcome %in% c("RSV-associated LRTI hospitalization") == F) %>%
+  mutate(outcome = case_when(outcome == "Medically attended RSV infection" ~ "Medically attended \nRSV infection",
+                             outcome == "RSV-associated outpatient visit" ~ "RSV-associated \noutpatient visit",
+                             outcome == "RSV-associated hospitalization" ~ "RSV-associated \nhospitalization",
+                             outcome == "RSV-associated severe outcomes" ~ "RSV-associated \nsevere outcomes",
+                             outcome == "RSV-associated LRTI" ~ "RSV-associated \nLRTI")) %>%
+  mutate(outcome = factor(outcome, levels = c("Medically attended \nRSV infection",
+                                              "RSV-associated \noutpatient visit",
+                                              "RSV-associated \nhospitalization",
+                                              "RSV-associated \nsevere outcomes",
+                                              "RSV-associated \nLRTI"))) %>%
+  filter(iter >= 50000 & iter <= 60000) %>%
+  ggplot() +
+  geom_line(aes(x = iter, y = value, color = factor(chain)), alpha = 0.4) +
+  scale_color_brewer(palette = "Dark2") +
+  facet_grid(beta ~ outcome, scales = "free") +
+  theme_bw() +
+  theme(legend.position = "top") +
+  xlab("Iteration") +
+  ylab("Parameter value") +
+  labs(color = "Chain") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+traceplot
+
+if(savenewplot){
+  ggsave(plot = traceplot, filename = "../figs_tabs/figures/traceplot.pdf", height = 9, width = 9)
+}
+  
+```
 
 
 

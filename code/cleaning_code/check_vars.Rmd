@@ -26,7 +26,7 @@ library(stringr)
 fig.counter <- 1
 tab.counter <- 1
 
-save_recoded_dataset <- FALSE
+save_recoded_dataset <- TRUE
 ```
 
 ### Table `r tab.counter`. StudyID
@@ -2010,13 +2010,13 @@ For some patients, they were tested multiple time. Delete testing records that h
 
 
 #### For positive tests results: 
-  * If tested positive for RSV more than once within 14 days (difference of testing date <= 14 days), keep only one most recent RSV+ record.
+  * If tested positive for RSV more than once within 14 days (difference of testing date <= 14 days), keep only one earliest RSV+ record.
   
 ##### Table `r tab.counter` Those with more than one positive tests within 14 days:
 ```{r echo = T}
 tab.counter <- tab.counter + 1
 
-# those with 2 positive tests
+# those with more than 1 positive tests
 id.temp <- (df %>% filter(positive_rsv == 1) %>% group_by(StudyID) %>% count() %>% filter(n > 1))$StudyID
 
 # those with 2 positive tests <= 14 days apart
@@ -2029,12 +2029,23 @@ df %>% filter(StudyID %in% id.temp) %>%
   reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"),
             groupBy = "StudyID")
 
-# only keep the most recent RSV+ record
-testID.temp <- (df %>% filter(StudyID %in% id.temp) %>% filter(positive_rsv ==1 ) %>% 
-  group_by(StudyID) %>% filter(collection_date == min(collection_date)))$testID
-df <- df %>% filter(testID %in% testID.temp == F)
+# only keep the earliest RSV+ record or keep the RSV+ admitted to hospital
+df <- df %>% filter(testID %in% c("130599389_2",
+                                  "130624850_1",
+                                  "130636329_1",
+                                  "130637768_2",
+                                  "130641930_1",
+                                  "130678023_4",
+                                  "130678388_1",
+                                  "130700197_2",
+                                  "130707737_1",
+                                  "130717977_1",
+                                  "130741333_2",
+                                  "130743252_2",
+                                  "130771847_1"
+                                  ) == F)
 
-
+# 3263 left
 ```
 
 <br>
@@ -2071,6 +2082,7 @@ testID.toremove1 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% 
   filter(interval <= 14) %>% 
   group_by(StudyID) %>% filter(max(positive_rsv) - min(positive_rsv) == 1) %>%
   filter(positive_rsv == 0))$testID
+
 # 2) if the two both are negative tests:
 # 2.1) if have different encounter_type (one inpatient, one outpatient record), keep the inpatient one
 testID.toremove2 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 2) %>%
@@ -2078,9 +2090,10 @@ testID.toremove2 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% 
   filter(interval <= 14) %>% 
   group_by(StudyID) %>% filter(max(positive_rsv) == 0) %>%
   mutate(n = n_distinct(encounter_type)) %>%
-  dplyr::select(testID, positive_rsv, encounter_type, n) %>% 
+  dplyr::select(testID, positive_rsv, encounter_type, n, `mAb date`) %>% 
   filter(n == 2 & encounter_type == "outpatient"))$testID
-# 2.2) if the two testing records have same encounter_type,  keep the latest negative test 
+
+# 2.2) if the two testing records have same encounter_type,  keep the earlier negative test 
 testID.toremove3 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 2) %>%
   group_by(StudyID) %>% mutate(interval = as.numeric(max(collection_date) - min(collection_date))) %>%
   filter(interval <= 14) %>% 
@@ -2089,7 +2102,7 @@ testID.toremove3 <- (a %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% 
   dplyr::select(testID, collection_date, positive_rsv, encounter_type, n) %>% 
   filter(n == 1) %>%
   group_by(StudyID) %>%
-  filter(collection_date == min(collection_date)))$testID
+  filter(collection_date == max(collection_date)))$testID
 
 df <- df %>% filter(testID %in% c(testID.toremove1, testID.toremove2, testID.toremove3) == F)
 
@@ -2098,7 +2111,7 @@ df <- df %>% filter(testID %in% c(testID.toremove1, testID.toremove2, testID.tor
 #######################################
 # Then look at patients with three tests
 #######################################
-a <- df %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 3) %>% ungroup()
+a <- df %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp == 3) %>% ungroup() 
 
 # records with test1 and test2 within 14 days OR test2 and test3 within 14 days
 temp <- a %>% group_by(StudyID) %>%
@@ -2108,37 +2121,38 @@ temp <- a %>% group_by(StudyID) %>%
 
 # Manually checked these and remove records
 testID.toremove <- c(
-                     # repeated earlier RSV- record
-                     "130575661_1", 
-                     "130580756_2", 
-                     "130602887_2", 
-                     "130620929_1", 
-                     "130623083_1", 
-                     "130623828_1", 
-                     "130626581_2",
-                     "130634844_2",
-                     "130643173_2",
-                     "130658437_2",
-                     "130665947_2",
-                     "130679674_1",
-                     "130710408_2",
-                     "130734145_1",
-                     "130746903_1",
-                     "130751613_1",
-                     "130752807_1",
-                     "130780764_2",
-                     # repeated earlier RSV- record in outpatient
+                     # repeated RSV- record (we want to keep the earlier one)
+                     "130575661_2", 
+                     "130620929_2", 
+                     "130623083_2", 
+                     "130623828_2", 
+                     "130626581_3",
+                     "130634844_3",
+                     "130642933_3",
+                     "130658437_3",
+                     "130665947_3",
+                     "130679674_2",
+                     "130710408_3",
+                     "130746903_2",
+                     "130751613_2",
+                     # repeated RSV- record in outpatient
                      "130632441_2",
                      "130657344_1",
+                     "130665962_2",
                      "130702757_1",
+                     "130709863_2",
                      "130715070_1",
-                     "130745292_1",
                      "130751754_2",
+                     "130780764_3",
                      # earlier RSV- followed by RSV+ 
                      "130700254_1",
                      "130740342_1",
+                     "130744029_1",
                      # RSV- right after RSV+
-                     "130728751_3"
+                     "130728751_3",
+                     # transfer to ICU
+                     "130739690_1",
+                     "130739690_3"
                      )
 df <- df %>% filter(testID %in% testID.toremove == F)
 
@@ -2148,39 +2162,37 @@ df <- df %>% filter(testID %in% testID.toremove == F)
 #######################################
 a <- df %>% group_by(StudyID) %>% mutate(n_tests_temp = n()) %>% filter(n_tests_temp > 3) %>% ungroup()
 
-# records with test1 and test2 within 14 days OR test2 and test3 within 14 days
 temp <- a %>% group_by(StudyID) %>%
   dplyr::select(testID, collection_date, positive_rsv, encounter_type, rsv_mab, icu_admitted) 
 
 # Manually checked these and remove records
 testID.toremove <- c(
   # RSV- followed by RSV+ 
-  "130577503_1", 
+  "130577503_1",
   # repeated RSV- record
-  "130577503_3",
-  "130585212_2",
-  "130606175_1",
+  "130577503_4",
+  "130606175_2",
   "130609940_1",
   "130609940_3",
-  "130624871_3",
-  "130635378_1",
-  "130654546_1",
-  "130666500_1",
-  "130666500_3",
-  "130705659_1",
+  "130624871_4",
+  "130635378_2",
+  "130643173_4",
+  "130654546_2",
+  "130666500_2",
   "130705659_2",
-  "130709635_1",
+  "130705659_3",
   "130709635_2",
-  "130709635_4",
-  "130719972_3",
-  "130719972_5",
+  "130709635_3",
+  "130719972_4",
+  "130719972_6",
   "130749578_3",
-  "130752957_1",
-  "130757819_1",
-  "130757819_3",
+  "130752957_2",
+  "130757819_2",
+  "130757819_4",
   # earlier RSV- outpatient later admitted
   "130603130_1",
   "130644922_1",
+  "130734145_1",
   # repeated RSV- in outpatient
   "130603130_3",
   # RSV- later admitted to ICU
@@ -2191,13 +2203,30 @@ df <- df %>% filter(testID %in% testID.toremove == F)
 
 ```
 
+### Remove the records from states other than NY CT RI (added on 8.12.2024)
+
+```{r echo = T}
+df <- df %>% filter(`Home State` %in% c("NY", "CT", "RI")) # removed 37 records
+```
+
+### we decided to only keep the first positive case of each patient in the main analysis (added on 8.13.2024)
+```{r}
+id.pos <- (df %>% filter(positive_rsv == 1) %>% group_by(StudyID) %>% count() %>% filter(n>1))$StudyID
+
+id.pos.toremove <- 
+  (df %>% filter(StudyID %in% id.pos) %>% 
+  dplyr::select(StudyID, collection_date, encounter_type, testID) %>%
+  arrange(StudyID, collection_date) %>% 
+  group_by(StudyID) %>% filter(collection_date != min(collection_date)))$testID 
+  
+df <- df %>% filter(testID %in% id.pos.toremove == F)
+
+```
+
 
 ### Save the cleaned dataset to be used for analyses.
 
 ```{r echo = T}
-save_recoded_dataset <- FALSE
-
-
 if(save_recoded_dataset){
   write.csv(df, "../../data/clean_data/df.mab.csv", row.names = F)
 }
@@ -2233,13 +2262,6 @@ df %>% filter(StudyID %in% id_multi_rsv_positive) %>%
 ```
 
 <br>
-
-```{r}
-if(save_recoded_dataset){
-  write.csv(df, "/Users/hmx/OneDrive - Yale University/Hanmeng RSV VE/data/RSV_mAb.csv", row.names = F)
-}
-```
-
 <br>
 
 ### Table `r tab.counter`. briefly look at risk factors by mAb status
@@ -2306,17 +2328,19 @@ df.ssa <- df.ssa %>%
 ```
 
 ```{r echo = T}
-save_recoded_dataset <- FALSE
-
-
 if(save_recoded_dataset){
-  write.csv(df.ssa, "../../data/clean_data/df.mab.ssa.csv", row.names = F)
+  write.csv(df.ssa, "../../data/clean_data/df.mab.vaxdefinition.csv", row.names = F)
 }
 
 # colnames <- as.data.frame(colnames(df))
 # write.csv(colnames, "../../data/clean_data/dictionary.csv", row.names = F)
 
 ```
+
+<br>
+
+
+
 
 
 

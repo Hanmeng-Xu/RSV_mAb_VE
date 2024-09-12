@@ -36,6 +36,8 @@ tab.counter <- 1
 source("utils_mAb_VE.R")
 source("jags_commensurate_prior.R")
 
+set.seed(123)
+
 
 rerun <- FALSE
 savenewplot <- FALSE
@@ -72,16 +74,48 @@ df <- read.csv("../data/clean_data/df.mab.csv")
 df <- process_df(df)
 ```
 
-```{r}
-# For VE against infection
-# only adjusting for those that has significant difference comparing RSV+ and RSV- records
+<br>
+
+### Use the same set of confounders as in the main analysis
+
+```{r echo = T}
 confounders_infection <- c(
   "age_at_test_in_months_cat_2", # 3-month interval
-  "month_when_tested_cat", 
-  "birth_weight",
-  "risk_factor_gestagelessthan37wks"
+  "month_when_tested_cat"
 )
 
+confounders_ed <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat"
+)
+
+confounders_inpatient <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
+
+confounders_severe <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
+
+confounders_LRTI <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
+
+confounders_LRTIhosp <- c(
+  "age_at_test_in_months_cat_2", # 3-month interval
+  "month_when_tested_cat",
+  "risk_factor_atleastone"
+)
+
+```
+
+```{r}
 # convert confounders from character to numeric 
 df <- df %>% 
   # recode confounders
@@ -97,16 +131,23 @@ df <- df %>%
                                      month_when_tested_cat == "April and after" ~ 4
                                      )) %>%
   # convert categorical confounders to dummy variables 
+  # age when being tested
   mutate(cf_age_1 = ifelse(cf_age == 1, 1, 0),
          cf_age_2 = ifelse(cf_age == 2, 1, 0),
          cf_age_3 = ifelse(cf_age == 3, 1, 0),
          cf_age_4 = ifelse(cf_age == 4, 1, 0), 
          cf_age_5 = ifelse(cf_age == 5, 1, 0)) %>%
+  # month when being tested
   mutate(cf_month_tested_1 = ifelse(cf_month_tested == 1, 1, 0),
          cf_month_tested_2 = ifelse(cf_month_tested == 2, 1, 0),
          cf_month_tested_3 = ifelse(cf_month_tested == 3, 1, 0),
          cf_month_tested_4 = ifelse(cf_month_tested == 4, 1, 0)) %>%
-  mutate(cf_gestage = risk_factor_gestagelessthan37wks)
+  mutate(cf_gestage = risk_factor_gestagelessthan37wks) %>%
+  mutate(cf_insurance_1 = ifelse(insurance_type == "private", 1, 0),
+         cf_insurance_2 = ifelse(insurance_type == "public", 1, 0),
+         cf_insurance_3 = ifelse(insurance_type == "uninsured", 1, 0)) %>%
+  # having at least one risk factor
+  mutate(cf_onerf = ifelse(risk_factor_atleastone == "yes", 1, 0))
 ```
 
 <br>
@@ -126,9 +167,12 @@ Comparing:
 ####################################################
 df.jags <- df %>% 
   filter(symp_LRT_distress == 1) %>%
-  mutate(case_control = positive_rsv) %>%
-  filter(!is.na(cf_birth_weight) & !is.na(cf_gestage))
+  mutate(case_control = positive_rsv) 
 
+
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
 
 dataset_uninformative_priors <- 
             list(
@@ -136,19 +180,11 @@ dataset_uninformative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-                # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-                cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage
+                # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
+
 
 dataset_informative_priors <- 
             list(
@@ -159,18 +195,9 @@ dataset_informative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-                # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-                cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage,
+                # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf),
                 # others
                 prior_mean_log_irr = 999, 
                 set_tau_shp=999, 
@@ -271,10 +298,12 @@ title("beta1 (informative priors)")
 ####################################################
 df.jags <- df %>% 
   filter(symp_LRT_distress == 1 & encounter_type == "inpatient") %>%
-  mutate(case_control = positive_rsv) %>% 
-  filter(!is.na(cf_birth_weight) & !is.na(cf_gestage))
+  mutate(case_control = positive_rsv)
   
 
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
 
 dataset_uninformative_priors <- 
             list(
@@ -282,19 +311,12 @@ dataset_uninformative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-                # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-                cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage
+                # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
                 )
+
+
 
 dataset_informative_priors <- 
             list(
@@ -305,18 +327,9 @@ dataset_informative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-                # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-                cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage,
+                # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf),
                 # others
                 prior_mean_log_irr = 999, 
                 set_tau_shp=999, 
@@ -415,9 +428,12 @@ title("beta1 (informative priors)")
 ####################################################
 df.jags <- df %>% 
   mutate(case_control = case_when(symp_LRT_distress == 1 ~ 1,
-                                  is.na(symp_LRT_distress) ~ 0)) %>%
-  filter(!is.na(cf_birth_weight) & !is.na(cf_gestage))
+                                  is.na(symp_LRT_distress) ~ 0))
 
+
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
 
 dataset_uninformative_priors <- 
             list(
@@ -425,19 +441,10 @@ dataset_uninformative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-                # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-                cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage
-                )
+                # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
+            )
 
 dataset_informative_priors <- 
             list(
@@ -448,18 +455,9 @@ dataset_informative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-                # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-                cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage,
+                # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf),
                 # others
                 prior_mean_log_irr = 999, 
                 set_tau_shp=999, 
@@ -560,9 +558,11 @@ title("beta1 (informative priors)")
 df.jags <- df %>% 
   filter(encounter_type == "inpatient") %>%
   mutate(case_control = positive_rsv) %>% 
-  filter(!is.na(case_control)) %>%
-  filter(!is.na(cf_birth_weight) & !is.na(cf_gestage))
+  filter(!is.na(case_control)) 
 
+M_cf <- df.jags %>% dplyr::select(cf_age_1, cf_age_2, cf_age_3, cf_age_4, 
+                                  cf_month_tested_1, cf_month_tested_2, cf_month_tested_3,
+                                  cf_onerf) %>% as.matrix()
 
 dataset_uninformative_priors <- 
             list(
@@ -570,19 +570,10 @@ dataset_uninformative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-                # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-                cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage
-                )
+                # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf)
+            )
 
 dataset_informative_priors <- 
             list(
@@ -593,18 +584,9 @@ dataset_informative_priors <-
                 N_people = nrow(df.jags),
                 case_status = df.jags$case_control,
                 vax = df.jags$rsv_mab,
-               # confounders
-                cf_age_1 = df.jags$cf_age_1, # age when tested
-                cf_age_2 = df.jags$cf_age_2,
-                cf_age_3 = df.jags$cf_age_3,
-                cf_age_4 = df.jags$cf_age_4,
-                cf_age_5 = df.jags$cf_age_5,
-                cf_month_tested_1 = df.jags$cf_month_tested_1, # month when tested
-                cf_month_tested_2 = df.jags$cf_month_tested_2,
-                cf_month_tested_3 = df.jags$cf_month_tested_3,
-                cf_month_tested_4 = df.jags$cf_month_tested_4,
-               cf_birth_weight = df.jags$cf_birth_weight,
-                cf_gestage = df.jags$cf_gestage,
+               # confounder matrix
+                M_cf = M_cf,
+                N_cf = ncol(M_cf),
                 # others
                 prior_mean_log_irr = 999, 
                 set_tau_shp=999, 
@@ -735,9 +717,14 @@ plt.compare <- df.compare %>%
     "Current case-control with Phase III trial data as informative priors"
   ))) %>%
   mutate(outcome = case_when(outcome == "Medically attended RSV LRTI" ~ "Medically attended \nRSV LRTI",
-                             outcome == "RSV-related LRTI hospitalization" ~ "RSV-related LRTI \n hospitalization",
+                             outcome == "RSV-related LRTI hospitalization" ~ "RSV-associated LRTI \n hospitalization",
                              outcome == "Medically attended all-cause LRTI" ~ "Medically attended\n all-cause LRTI",
-                             outcome == "RSV-related respiratory hospitalization" ~ "RSV-related \nhospitalization")) %>%
+                             outcome == "RSV-related respiratory hospitalization" ~ "RSV-associated \nhospitalization")) %>%
+  mutate(outcome = factor(outcome,
+                          levels = c("Medically attended\n all-cause LRTI",
+                                     "RSV-associated \nhospitalization",
+                                     "RSV-associated LRTI \n hospitalization",
+                                     "Medically attended \nRSV LRTI"))) %>%
   ggplot() +
   geom_point(aes(x = outcome, y = median, color = source), position = position_dodge(0.5)) +
   geom_errorbar(aes(x = outcome, ymin = lb, ymax = ub, color = source), position = position_dodge(0.5),
@@ -764,19 +751,19 @@ plt.compare <- df.compare %>%
   geom_segment(aes(x = 1.83, xend = 2, y = 100 , yend = 100), size = 0.2) +
   geom_segment(aes(x = 1.83, xend = 1.83, y = 100, yend = 97), size = 0.2) +
   geom_segment(aes(x = 2, xend = 2, y = 100, yend = 97), size = 0.2) +
-  geom_text(aes(x = (1.83+2)/2, y = 105, label = as.character(round(shared.median.RSVLRTI,2)) ),
+  geom_text(aes(x = (1.83+2)/2, y = 105, label = as.character(round(shared.median.RSVhosp,2)) ),
             check_overlap = TRUE, size = 3.5) +
   # RSV hosp
   geom_segment(aes(x = 2.83, xend = 3, y = 100 , yend = 100), size = 0.2) +
   geom_segment(aes(x = 2.83, xend = 2.83, y = 100, yend = 97), size = 0.2) +
   geom_segment(aes(x = 3, xend = 3, y = 100, yend = 97), size = 0.2) +
-  geom_text(aes(x = (2.83+3)/2, y = 105, label = as.character(round(shared.median.RSVhosp,2)) ),
+  geom_text(aes(x = (2.83+3)/2, y = 105, label = as.character(round(shared.median.RSVLRTIhosp,2)) ),
             check_overlap = TRUE, size = 3.5) +
   # RSV LRTI hosp
   geom_segment(aes(x = 3.83, xend = 4, y = 100 , yend = 100), size = 0.2) +
   geom_segment(aes(x = 3.83, xend = 3.83, y = 100, yend = 97), size = 0.2) +
   geom_segment(aes(x = 4, xend = 4, y = 100, yend = 97), size = 0.2) +
-  geom_text(aes(x = (3.83+4)/2, y = 105, label = as.character(round(shared.median.RSVLRTIhosp,2)) ),
+  geom_text(aes(x = (3.83+4)/2, y = 105, label = as.character(round(shared.median.RSVLRTI,2)) ),
             check_overlap = TRUE, size = 3.5)
   
   
@@ -787,6 +774,7 @@ if(savenewplot){
   ggsave(plot = plt.compare, filename = "../figs_tabs/figures/ve.sequential.addshared.pdf", height = 5, width = 7)
 }
 ```
+
 
 
 

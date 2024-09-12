@@ -144,6 +144,9 @@ process_df <- function(df){
   df <- df %>% 
     mutate(highflow_oxygen = ifelse(is.na(highflow_oxygen), 0, highflow_oxygen))
   
+  # there seems to be individuals not admitted to hospital but had hosp los
+  
+  
   return(df)
   
 }
@@ -231,6 +234,61 @@ regress_unmatch <- function(df.ve,
 
   # adjusted
   formula <- as.formula(paste(c("case_control ~ rsv_mab", confounders), collapse = " + ")) 
+  model <- glm(formula, data = df.ve, family = "binomial") 
+  ve.median.adj <- 1 - exp(model$coefficients[2])
+  ve.ub.adj <- 1 - exp(confint(model)[2,][1])
+  ve.lb.adj <- 1 - exp(confint(model)[2,][2])
+  
+  # make a table
+  ve.results <- data.frame(
+    n_cases_mab = paste0(n.cases.mab, " (", n.cases.mab.adj, ")"),
+    n_cases_nomab = paste0(n.cases.nomab, " (", n.cases.nomab.adj, ")"),
+    n_controls_mab = paste0(n.controls.mab, " (", n.controls.mab.adj, ")"),
+    n_controls_nomab = paste0(n.controls.nomab, " (", n.controls.nomab.adj, ")"),
+    ve_unadj = paste0(round(ve.median.unadj*100,1), " (", round(ve.lb.unadj*100,1), "-", round(ve.ub.unadj*100,1), ")"),
+    ve_adj = paste0(round(ve.median.adj*100,1), " (", round(ve.lb.adj*100,1), "-", round(ve.ub.adj*100,1), ")")
+  ) 
+  
+  # row.names(ve.results) <- NULL
+  
+  return(ve.results)
+}
+
+
+###############################
+# (SSA) Functions for VE estimation (regression models) for SSA!
+###############################
+
+## unmatched  model (unstratified)
+regress_unmatch_hepb <- function(df.ve,
+                            confounders){
+  
+  # get n of cases and controls for unadjusted analysis
+  n.cases.mab <- df.ve %>% filter(case_control == 1 & hep_vax == 1) %>% nrow()
+  n.cases.nomab <- df.ve %>% filter(case_control == 1 & hep_vax == 0) %>% nrow()
+  n.controls.mab <- df.ve %>% filter(case_control == 0 & hep_vax == 1) %>% nrow()
+  n.controls.nomab <- df.ve %>% filter(case_control == 0 & hep_vax == 0) %>% nrow()
+  
+  # get n of cases and controls for adjusted analysis
+  n.cases.mab.adj <-  df.ve[, c("case_control", "hep_vax", confounders)] %>% 
+    drop_na() %>% filter(case_control == 1 & hep_vax == 1) %>% nrow()
+  n.cases.nomab.adj <-  df.ve[, c("case_control",  "hep_vax", confounders)] %>% 
+    drop_na() %>% filter(case_control == 1 & hep_vax == 0) %>% nrow()
+  n.controls.mab.adj <- df.ve[, c("case_control",  "hep_vax", confounders)] %>% 
+    drop_na() %>% filter(case_control == 0 & hep_vax == 1) %>% nrow()
+  n.controls.nomab.adj <- df.ve[, c("case_control",  "hep_vax", confounders)] %>% 
+    drop_na() %>% filter(case_control == 0 & hep_vax == 0) %>% nrow()
+  
+  
+  # unadjusted
+  formula <- as.formula("case_control ~ hep_vax") 
+  model <- glm(formula, data = df.ve, family = "binomial") 
+  ve.median.unadj <- 1 - exp(model$coefficients[2])
+  ve.ub.unadj <- 1 - exp(confint(model)[2,][1])
+  ve.lb.unadj <- 1 - exp(confint(model)[2,][2])
+  
+  # adjusted
+  formula <- as.formula(paste(c("case_control ~ hep_vax", confounders), collapse = " + ")) 
   model <- glm(formula, data = df.ve, family = "binomial") 
   ve.median.adj <- 1 - exp(model$coefficients[2])
   ve.ub.adj <- 1 - exp(confint(model)[2,][1])
@@ -363,10 +421,11 @@ ve_forest_withn <- function(df.plot = ve){
   a[which(a$n_dash == 1),]$ve_adj_lb <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,1])
   a[which(a$n_dash == 1),]$ve_adj_ub <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
   
-  # when there is lb < 0 
-  #a[which(a$n_dash == 2),]$ve_adj_lb <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
-  #a[which(a$n_dash == 2),]$ve_adj_ub <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
-  
+  if(2 %in% a$n_dash){
+    # when there is lb < 0 
+    a[which(a$n_dash == 2),]$ve_adj_lb <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
+    a[which(a$n_dash == 2),]$ve_adj_ub <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  }
   a <- a %>% dplyr::rename(ve_adj_median = V1)
   
   df.plot <- cbind(df.plot, a %>% dplyr::select(starts_with("ve_adj"))) %>% 
@@ -445,7 +504,10 @@ ve_forest_withn <- function(df.plot = ve){
 
 
 # Function making the plot with 2 rows for each outcome 
-ve_forest_2rows <- function(df.plot = ve){
+ve_forest_2rows <- function(df.plot = ve,
+                            ssa = FALSE){
+  
+  if(ssa){col_name = ""}else{col_name = "Outcome prevented\n"}
   
   # breakdown adjusted ve estimates from character to numeric columns (median, lb, ub)
   a <- matrix(unlist(strsplit(df.plot$ve_adj, "\\(")), ncol = 2, byrow = T) %>% 
@@ -460,8 +522,14 @@ ve_forest_2rows <- function(df.plot = ve){
   a[which(a$n_dash == 1),]$ve_adj_ub <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
   
   # when there is lb < 0 
-  #a[which(a$n_dash == 2),]$ve_adj_lb <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
-  #a[which(a$n_dash == 2),]$ve_adj_ub <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  # a[which(a$n_dash == 2),]$ve_adj_lb <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
+  # a[which(a$n_dash == 2),]$ve_adj_ub <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  
+  if(2 %in% a$n_dash){
+    # when there is lb < 0 
+    a[which(a$n_dash == 2),]$ve_adj_lb <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
+    a[which(a$n_dash == 2),]$ve_adj_ub <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  }
   
   a <- a %>% dplyr::rename(ve_adj_median = V1)
   
@@ -476,7 +544,7 @@ ve_forest_2rows <- function(df.plot = ve){
     df.plot.rearranged.temp <- 
       data.frame(
         outcome = c(df.plot.temp$against, NA, NA),
-        vax = c(NA, "Unvaccinated", "Vaccinated"),
+        vax = c(NA, "Not immunized", "Immunized"),
         case = c(NA, df.plot.temp$n_cases_nomab, df.plot.temp$n_cases_mab),
         control = c(NA, df.plot.temp$n_controls_nomab, df.plot.temp$n_controls_mab),
         ve_unadj = c(NA, "REF", df.plot.temp$ve_unadj), 
@@ -491,20 +559,27 @@ ve_forest_2rows <- function(df.plot = ve){
     
   }
   
+  # add some vars for plotting
+  df.plot.rearrange <- df.plot.rearrange %>% 
+    # too low lb --> stops at -50% with an arrow 
+    mutate(add_arrow = ifelse(ve_adj_lb < -25, 1, 0)) %>% 
+    mutate(ve_adj_lb = ifelse(add_arrow == 1, -25, ve_adj_lb)) 
+  
   
   
   # create labels as the first row
   df.plt <- 
     rbind(
-      data.frame(outcome = "Outcome prevented\n",
+      data.frame(outcome = col_name,
                  vax = NA,
                  case = "RSV positive\n",
                  control = "RSV negative\n",
-                 ve_unadj = "Unadjusted VE (95% CI)\n",
-                 ve_adj = "Adjusted VE (95% CI)\n",
+                 ve_unadj = "\nUnadjusted \nEffectiveness (95%CI)\n",
+                 ve_adj = "\nAdjusted \nEffectiveness (95%CI)\n",
                  ve_adj_median = NA,
                  ve_adj_lb = NA, 
-                 ve_adj_ub = NA
+                 ve_adj_ub = NA,
+                 add_arrow = NA
       ),
       df.plot.rearrange
     )
@@ -512,26 +587,42 @@ ve_forest_2rows <- function(df.plot = ve){
   df.plt <- df.plt %>% 
     mutate(ve_index = factor(1:nrow(df.plt), levels = as.character(nrow(df.plt):1)))
   
-  plt.left <- df.plt %>% 
-    ggplot(aes(y = ve_index)) +
-    geom_text(aes(x = 0, label = outcome), hjust = 0, fontface= c('bold')) +
-    geom_text(aes(x = 0.05, label = vax), hjust = 0, lineheight = .75) +
-    geom_text(aes(x = 0.3, label = case), hjust = 0, lineheight = .75) +
-    geom_text(aes(x = 0.45, label = control), hjust = 0, lineheight = .75) +
-    geom_text(aes(x = 0.6, label = ve_unadj), hjust = 0, lineheight = .75) +
-    geom_text(aes(x = 0.83, label = ve_adj), hjust = 0, lineheight = .75) +
+  
+  # plot bold column name separately
+  df.plt.colname <- df.plt %>% filter(case == "RSV positive\n")
+  # plot other rows
+  df.plt.body <- df.plt[-1,]
+  
+  x_pos <- c(0, 0.05, 0.3, 0.45, 0.6, 0.83)
+  
+  
+  plt.left <- 
+    ggplot() +
+    # bold colnames
+    geom_text(aes(x = x_pos[1],y = ve_index, label = outcome), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plt) +
+    geom_text(aes(x = x_pos[2],y = ve_index, label = vax), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    geom_text(aes(x = x_pos[3],y = ve_index, label = case), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    geom_text(aes(x = x_pos[4],y = ve_index, label = control), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    geom_text(aes(x = x_pos[5],y = ve_index, label = ve_unadj), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    geom_text(aes(x = x_pos[6],y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    # unbold body
+    geom_text(aes(x = x_pos[2],y = ve_index, label = vax), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[3],y = ve_index, label = case), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[4],y = ve_index, label = control), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[5],y = ve_index, label = ve_unadj), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[6],y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, data = df.plt.body) +
     theme_void() +
     coord_cartesian(xlim = c(0, 1))
   
-  # df.plt.arrow <- df.plt %>% filter(add_arrow == 1)
+  df.plt.arrow <- df.plt %>% filter(add_arrow == 1)
   
   plt.right <- 
     ggplot(aes(y = ve_index), data = df.plt) +
     geom_point(aes(x= ve_adj_median), shape=15, size=3, data = df.plt) +
     geom_linerange(aes(xmin = ve_adj_lb, xmax = ve_adj_ub), data = df.plt)  +
-    # geom_segment(aes(x = ve_adj_ub, xend = ve_adj_lb, 
-    #                  y = ve_index, yend = ve_index), data = df.plt.arrow,  
-    #              arrow = arrow(length = unit(2, "mm"))) +
+    geom_segment(aes(x = ve_adj_ub, xend = -25,
+                     y = ve_index, yend = ve_index), data = df.plt.arrow,
+                 arrow = arrow(length = unit(2, "mm"))) +
     geom_vline(xintercept = 0, linetype = "dashed") + 
     xlab("Effectiveness of Nirsevimab (%)") +
     theme(panel.grid.major = element_blank(), 
@@ -541,7 +632,11 @@ ve_forest_2rows <- function(df.plot = ve){
           axis.title.y=element_blank(),
           axis.ticks.y=element_blank(),
           axis.line.y = element_blank(),
-          axis.line = element_line(colour = "black"))
+          axis.line = element_line(colour = "black")) +
+    scale_x_continuous(limits = c(-25, 100),
+                       breaks = c(-25, 0, 25, 50, 75, 100),
+                       labels = c("-25", "0", "25", "50", "75", "100")) 
+    
   
   layout <- c(
     area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
@@ -617,7 +712,7 @@ ve_forest_dose <- function(df.plot = ve.dose){
     df.plot.rearranged.temp <- 
       data.frame(
         outcome = c(df.plot.temp$against, NA, NA, NA),
-        vax = c(NA, "Unvaccinated", "Vaccinated (50mg)", "Vaccinated (100mg)"),
+        vax = c(NA, "Not immunized", "Immunized (50mg)", "Immunized (100mg)"),
         case = c(NA, df.plot.temp$n_cases_nomab, df.plot.temp$n_cases_mab_50mg, df.plot.temp$n_cases_mab_100mg),
         control = c(NA, df.plot.temp$n_controls_nomab, df.plot.temp$n_controls_mab_50mg, df.plot.temp$n_controls_mab_100mg),
         ve_unadj = c(NA, "REF", df.plot.temp$ve_unadj_50mg, df.plot.temp$ve_unadj_100mg), 
@@ -647,8 +742,8 @@ ve_forest_dose <- function(df.plot = ve.dose){
                  vax = NA,
                  case = "RSV positive\n",
                  control = "RSV negative\n",
-                 ve_unadj = "Unadjusted VE (95% CI)\n",
-                 ve_adj = "Adjusted VE (95% CI)\n",
+                 ve_unadj = "Unadjusted \nEffectiveness (95%CI)\n",
+                 ve_adj = "Adjusted \nEffectiveness (95%CI)\n",
                  ve_adj_median = NA,
                  ve_adj_lb = NA, 
                  ve_adj_ub = NA,
@@ -662,7 +757,7 @@ ve_forest_dose <- function(df.plot = ve.dose){
   
   plt.left <- df.plt %>% 
     ggplot(aes(y = ve_index)) +
-    geom_text(aes(x = 0, label = outcome), hjust = 0, fontface= c('bold')) +
+    geom_text(aes(x = 0, label = outcome), hjust = 0, fontface= c('bold'), lineheight = 0.8) +
     geom_text(aes(x = 0.05, label = vax), hjust = 0, lineheight = .75) +
     geom_text(aes(x = 0.3, label = case), hjust = 0, lineheight = .75) +
     geom_text(aes(x = 0.45, label = control), hjust = 0, lineheight = .75) +
@@ -706,7 +801,7 @@ ve_forest_dose <- function(df.plot = ve.dose){
 }
 
 # function to compare dose-specific VE, adding any dose (100mg or 50mg) category
-ve_forest_dose_addanydose <- function(df.plot = ve.dose.addanydose){
+ve_forest_dose_addanydose <- function(df.plot){
   
   # breakdown adjusted ve estimates from character to numeric columns (median, lb, ub)
   
@@ -790,7 +885,7 @@ ve_forest_dose_addanydose <- function(df.plot = ve.dose.addanydose){
     df.plot.rearranged.temp <- 
       data.frame(
         outcome = c(df.plot.temp$against, NA, NA, NA, NA),
-        vax = c(NA, "Unvaccinated", "Vaccinated (50mg)", "Vaccinated (100mg)", "Vaccinated (any dosage)"),
+        vax = c(NA, "Not immunized", "Immunized (50mg)", "Immunized (100mg)", "Immunized (any dosage)"),
         case = c(NA, df.plot.temp$n_cases_nomab, df.plot.temp$n_cases_mab_50mg, df.plot.temp$n_cases_mab_100mg, df.plot.temp$n_cases_mab_anydose),
         control = c(NA, df.plot.temp$n_controls_nomab, df.plot.temp$n_controls_mab_50mg, df.plot.temp$n_controls_mab_100mg, df.plot.temp$n_controls_mab_anydose),
         ve_unadj = c(NA, "REF", df.plot.temp$ve_unadj_50mg, df.plot.temp$ve_unadj_100mg, df.plot.temp$ve_unadj_anydose), 
@@ -809,6 +904,199 @@ ve_forest_dose_addanydose <- function(df.plot = ve.dose.addanydose){
   # add some vars for plotting
   df.plot.rearrange <- df.plot.rearrange %>% 
     # too low lb --> stops at -50% with an arrow 
+    mutate(add_arrow = ifelse(ve_adj_lb < -25, 1, 0)) %>% 
+    mutate(ve_adj_lb = ifelse(add_arrow == 1, -25, ve_adj_lb)) 
+  
+  
+  # create labels as the first row
+  df.plt <- 
+    rbind(
+      data.frame(outcome = "Outcome prevented\n",
+                 vax = NA,
+                 case = "RSV positive\n",
+                 control = "RSV negative\n",
+                 ve_unadj = "\nUnadjusted \nEffectiveness (95%CI)\n",
+                 ve_adj = "\nAdjusted \nEffectiveness (95%CI)\n",
+                 ve_adj_median = NA,
+                 ve_adj_lb = NA, 
+                 ve_adj_ub = NA,
+                 add_arrow = NA
+      ),
+      df.plot.rearrange
+    )
+  
+  df.plt <- df.plt %>% 
+    mutate(ve_index = factor(1:nrow(df.plt), levels = as.character(nrow(df.plt):1)))
+  
+  # plot bold column name separately
+  df.plt.colname <- df.plt %>% filter(case == "RSV positive\n")
+  # plot other rows
+  df.plt.body <- df.plt[-1,]
+  
+  x_pos <- c(0, 0.05, 0.28, 0.40, 0.52, 0.7)
+  
+  plt.left <- df.plt %>% 
+    ggplot(aes(y = ve_index)) +
+    geom_text(aes(x = x_pos[1], y = ve_index, label = outcome), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plt) +
+    # bold colnames
+    geom_text(aes(x = x_pos[2], y = ve_index, label = vax), hjust = 0,fontface= c('bold'), lineheight = .75, data = df.plt.colname) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = case), hjust = 0, fontface= c('bold'),lineheight = .75, data = df.plt.colname) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = control), hjust = 0,fontface= c('bold'), lineheight = .75, data = df.plt.colname) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_unadj), hjust = 0,fontface= c('bold'), lineheight = .75, data = df.plt.colname) +
+    geom_text(aes(x = x_pos[6], y = ve_index, label = ve_adj), hjust = 0,fontface= c('bold'), lineheight = .75, data = df.plt.colname) +
+    # unbold body
+    geom_text(aes(x = x_pos[2], y = ve_index, label = vax), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = case), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = control), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_unadj), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[6], y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, data = df.plt.body) +
+    theme_void() +
+    coord_cartesian(xlim = c(0, 0.82))
+  
+  df.plt.arrow <- df.plt %>% filter(add_arrow == 1)
+  
+  plt.right <- 
+    ggplot(aes(y = ve_index), data = df.plt) +
+    geom_point(aes(x= ve_adj_median), shape=15, size=3, data = df.plt) +
+    geom_linerange(aes(xmin = ve_adj_lb, xmax = ve_adj_ub), data = df.plt)  +
+    geom_segment(aes(x = ve_adj_ub, xend = ve_adj_lb,
+                     y = ve_index, yend = ve_index), data = df.plt.arrow,
+                 arrow = arrow(length = unit(2, "mm"))) +
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+    xlab("Effectiveness of Nirsevimab (%)") +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.line.y = element_blank(),
+          axis.line = element_line(colour = "black"))
+  
+  layout <- c(
+    area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+    area(t = 1, l = 8, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  )
+  
+  # final plot arrangement
+  plt <- plt.left +  plt.right + plot_layout(design = layout)
+  
+  return(plt)
+  
+  
+  
+}
+
+
+
+# function to compare dose-specific VE, adding any dose (100mg or 50mg) category
+# but only stratify by dose for selected outcomes
+ve_forest_dose_addanydose_selectoc <- function(df.plot = ve.dose.addanydose){
+  
+  # breakdown adjusted ve estimates from character to numeric columns (median, lb, ub)
+  
+  # first, process 100mg VE
+  a.100mg <- matrix(unlist(strsplit(df.plot$ve_adj_100mg, "\\(")), ncol = 2, byrow = T) %>% 
+    as.data.frame() %>%
+    mutate(V2 = str_replace(V2, "\\)", "")) %>% 
+    mutate(n_dash = str_count(V2, "-"))
+  
+  a.100mg$ve_adj_lb_100mg <- NA
+  a.100mg$ve_adj_ub_100mg <- NA
+  
+  a.100mg[which(a.100mg$n_dash == 1),]$ve_adj_lb_100mg <- as.numeric(matrix(unlist(strsplit((a.100mg[which(a.100mg$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,1])
+  a.100mg[which(a.100mg$n_dash == 1),]$ve_adj_ub_100mg <- as.numeric(matrix(unlist(strsplit((a.100mg[which(a.100mg$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
+  
+  if(2 %in% a.100mg$n_dash){
+    # when there is lb < 0 
+    a.100mg[which(a.100mg$n_dash == 2),]$ve_adj_lb_100mg <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a.100mg[which(a.100mg$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
+    a.100mg[which(a.100mg$n_dash == 2),]$ve_adj_ub_100mg <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a.100mg[which(a.100mg$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  }
+  
+  a.100mg <- a.100mg %>% dplyr::rename(ve_adj_median_100mg = V1)
+  
+  df.plot <- cbind(df.plot, a.100mg %>% dplyr::select(starts_with("ve_adj"))) %>% 
+    mutate(across(c(ve_adj_median_100mg, ve_adj_lb_100mg, ve_adj_ub_100mg), ~ as.numeric(.))) 
+  
+  
+  # then, process 50mg VE
+  a.50mg <- matrix(unlist(strsplit(df.plot$ve_adj_50mg, "\\(")), ncol = 2, byrow = T) %>% 
+    as.data.frame() %>%
+    mutate(V2 = str_replace(V2, "\\)", "")) %>% 
+    mutate(n_dash = str_count(V2, "-"))
+  
+  a.50mg$ve_adj_lb_50mg <- NA
+  a.50mg$ve_adj_ub_50mg <- NA
+  
+  a.50mg[which(a.50mg$n_dash == 1),]$ve_adj_lb_50mg <- as.numeric(matrix(unlist(strsplit((a.50mg[which(a.50mg$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,1])
+  a.50mg[which(a.50mg$n_dash == 1),]$ve_adj_ub_50mg <- as.numeric(matrix(unlist(strsplit((a.50mg[which(a.50mg$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
+  
+  if(2 %in% a.50mg$n_dash){
+    # when there is lb < 0 
+    a.50mg[which(a.50mg$n_dash == 2),]$ve_adj_lb_50mg <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a.50mg[which(a.50mg$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
+    a.50mg[which(a.50mg$n_dash == 2),]$ve_adj_ub_50mg <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a.50mg[which(a.50mg$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  }
+  
+  a.50mg <- a.50mg %>% dplyr::rename(ve_adj_median_50mg = V1)
+  
+  df.plot <- cbind(df.plot, a.50mg %>% dplyr::select(starts_with("ve_adj"))) %>% 
+    mutate(across(c(ve_adj_median_50mg, ve_adj_lb_50mg, ve_adj_ub_50mg), ~ as.numeric(.))) 
+  
+  
+  # then process anydose cat
+  a.anydose <- matrix(unlist(strsplit(df.plot$ve_adj_anydose, "\\(")), ncol = 2, byrow = T) %>% 
+    as.data.frame() %>%
+    mutate(V2 = str_replace(V2, "\\)", "")) %>% 
+    mutate(n_dash = str_count(V2, "-"))
+  
+  a.anydose$ve_adj_lb_anydose <- NA
+  a.anydose$ve_adj_ub_anydose <- NA
+  
+  a.anydose[which(a.anydose$n_dash == 1),]$ve_adj_lb_anydose <- as.numeric(matrix(unlist(strsplit((a.anydose[which(a.anydose$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,1])
+  a.anydose[which(a.anydose$n_dash == 1),]$ve_adj_ub_anydose <- as.numeric(matrix(unlist(strsplit((a.anydose[which(a.anydose$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
+  
+  if(2 %in% a.anydose$n_dash){
+    # when there is lb < 0 
+    a.anydose[which(a.anydose$n_dash == 2),]$ve_adj_lb_anydose <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a.anydose[which(a.anydose$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
+    a.anydose[which(a.anydose$n_dash == 2),]$ve_adj_ub_anydose <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a.anydose[which(a.anydose$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
+  }
+  
+  a.anydose <- a.anydose %>% dplyr::rename(ve_adj_median_anydose = V1)
+  
+  df.plot <- cbind(df.plot, a.anydose %>% dplyr::select(starts_with("ve_adj"))) %>% 
+    mutate(across(c(ve_adj_median_anydose, ve_adj_lb_anydose, ve_adj_ub_anydose), ~ as.numeric(.))) 
+  
+  
+  # rearrange the data frame
+  for(i in 1:nrow(df.plot)){
+    
+    # rearrange
+    df.plot.temp <- df.plot[i,]
+    df.plot.rearranged.temp <- 
+      data.frame(
+        outcome = c(df.plot.temp$against, NA, NA, NA, NA),
+        vax = c(NA, "Not immunized", "Immunized (50mg)", "Immunized (100mg)", "Immunized (any dosage)"),
+        case = c(NA, df.plot.temp$n_cases_nomab, df.plot.temp$n_cases_mab_50mg, df.plot.temp$n_cases_mab_100mg, df.plot.temp$n_cases_mab_anydose),
+        control = c(NA, df.plot.temp$n_controls_nomab, df.plot.temp$n_controls_mab_50mg, df.plot.temp$n_controls_mab_100mg, df.plot.temp$n_controls_mab_anydose),
+        ve_unadj = c(NA, "REF", df.plot.temp$ve_unadj_50mg, df.plot.temp$ve_unadj_100mg, df.plot.temp$ve_unadj_anydose), 
+        ve_adj = c(NA, "REF", df.plot.temp$ve_adj_50mg, df.plot.temp$ve_adj_100mg, df.plot.temp$ve_adj_anydose),
+        ve_adj_median = c(NA, NA, df.plot.temp$ve_adj_median_50mg, df.plot.temp$ve_adj_median_100mg, df.plot.temp$ve_adj_median_anydose),
+        ve_adj_lb = c(NA, NA, df.plot.temp$ve_adj_lb_50mg, df.plot.temp$ve_adj_lb_100mg, df.plot.temp$ve_adj_lb_anydose),
+        ve_adj_ub = c(NA, NA, df.plot.temp$ve_adj_ub_50mg, df.plot.temp$ve_adj_ub_100mg, df.plot.temp$ve_adj_ub_anydose)
+      )
+    
+    if(i == 1){df.plot.rearrange <- df.plot.rearranged.temp}
+    if(i != 1){df.plot.rearrange <- rbind(df.plot.rearrange, df.plot.rearranged.temp)}
+    
+  }
+  
+  # stratify by dose for only infection 
+  df.plot.rearrange <- df.plot.rearrange[-c(8,9,13,14,18,19,23,24,28,29),]
+    
+  
+  # add some vars for plotting
+  df.plot.rearrange <- df.plot.rearrange %>% 
+    # too low lb --> stops at -50% with an arrow 
     mutate(add_arrow = ifelse(ve_adj_lb < -50, 1, 0)) %>% 
     mutate(ve_adj_lb = ifelse(add_arrow == 1, -50, ve_adj_lb)) 
   
@@ -820,8 +1108,8 @@ ve_forest_dose_addanydose <- function(df.plot = ve.dose.addanydose){
                  vax = NA,
                  case = "RSV positive\n",
                  control = "RSV negative\n",
-                 ve_unadj = "Unadjusted VE (95% CI)\n",
-                 ve_adj = "Adjusted VE (95% CI)\n",
+                 ve_unadj = "\nUnadjusted \nEffectiveness (95%CI)\n",
+                 ve_adj = "\nAdjusted \nEffectiveness (95%CI)\n",
                  ve_adj_median = NA,
                  ve_adj_lb = NA, 
                  ve_adj_ub = NA,
@@ -835,7 +1123,7 @@ ve_forest_dose_addanydose <- function(df.plot = ve.dose.addanydose){
   
   plt.left <- df.plt %>% 
     ggplot(aes(y = ve_index)) +
-    geom_text(aes(x = 0, label = outcome), hjust = 0, fontface= c('bold')) +
+    geom_text(aes(x = 0, label = outcome), hjust = 0, fontface= c('bold'), lineheight = 0.8) +
     geom_text(aes(x = 0.05, label = vax), hjust = 0, lineheight = .75) +
     geom_text(aes(x = 0.28, label = case), hjust = 0, lineheight = .75) +
     geom_text(aes(x = 0.40, label = control), hjust = 0, lineheight = .75) +
@@ -905,6 +1193,509 @@ break_ve <-function(df.plot = ve.wane.2m){
   
   return(df.plot.broken)
 }
+
+
+### Function to plot all VE in literature and compare with current VE
+plot_ve <- function(df.outcome){
+  
+  # first, plot the left panel
+  outcome <- df.outcome$outcome_group[1]
+  df.plot <- df.outcome %>% arrange(VE_mean) %>% dplyr::select(-outcome) %>%
+    mutate(outcome = NA) %>% dplyr::select(outcome, studyID, study_type, country, time_range, ve_adj, VE_mean, VE_lb, VE_ub)
+    
+  df.plot <- 
+    rbind(
+      data.frame(
+        outcome = c(outcome,NA),
+        studyID = c(NA, "Study"),
+        study_type = c(NA, "Design"),
+        country = c(NA, "Country"),
+        time_range = c(NA, "Time"),
+        ve_adj = c(NA, "Effectiveness (95%CI)"),
+        VE_mean = c(NA,NA), 
+        VE_lb = c(NA,NA), 
+        VE_ub = c(NA,NA)
+      ),
+      df.plot
+    )
+  
+  # mark if arrows are needed 
+  df.plot <- df.plot %>% 
+    mutate(add_arrow = ifelse(VE_lb < -25, 1, 0)) %>%
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1))) %>%
+    mutate(VE_lb = ifelse(is.na(VE_lb), VE_mean, VE_lb), # some are missing lb and ub
+           VE_ub = ifelse(is.na(VE_ub), VE_mean, VE_ub)) %>%
+    mutate(VE_mean = as.numeric(VE_mean),
+           VE_lb = as.numeric(VE_lb),
+           VE_ub = as.numeric(VE_ub))
+  
+  # plot bold column name separately
+  df.plot.colname <- df.plot %>% filter(studyID == "Study")
+  # plot other rows
+  df.plot.body <- df.plot %>% filter(studyID != "Study" | is.na(studyID))
+  
+  # current study 
+  df.plot.current <- df.plot %>% 
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1))) %>%
+    filter(studyID == "Current study")
+  
+  # define the position of each column
+  x_pos <- c(0.05, 0.25, 0.38, 0.50, 0.62)
+  
+  
+  # making the left plot 
+  plt.left <-
+    ggplot() +
+    # outcome name
+    geom_text(aes(x = 0, y = ve_index, label = outcome), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plot) +
+    # plot the colname (bold)
+    geom_text(aes(x = x_pos[1], y = ve_index, label = studyID), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[2], y = ve_index, label = study_type), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = country), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = time_range), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_adj), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    # plot the body (unbold)
+    geom_text(aes(x = x_pos[1], y = ve_index, label = studyID), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[2], y = ve_index, label = study_type), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = country), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = time_range), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, data = df.plot.body) +
+    theme_void() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.line.y = element_blank(),
+          axis.line.x = element_blank(),
+          axis.line = element_line(colour = "black"),
+          plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    coord_cartesian(xlim = c(0, 0.78)) +
+    # add shaded areas for current studies
+    geom_rect(data = df.plot.current, aes(xmin = -Inf, xmax = Inf, ymin = as.numeric(ve_index)-0.5, ymax = as.numeric(ve_index) + 0.5), 
+              fill = "grey", alpha = 0.3)
+    
+    
+  
+  # reverse the index to align righ and left plot
+  df.plot <- df.plot %>% 
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1)))
+
+  df.plot.arrow <- df.plot %>% filter(add_arrow == 1)
+  df.plot.arrow.current <-   df.plot.arrow %>% filter(str_detect(studyID, "Current study"))
+  df.plot.current <- df.plot %>% filter(str_detect(studyID, "Current study"))
+  
+  # filter out clinical trials and current study
+  df.trial <- df.plot %>% filter(study_type == "trial")
+  df.current <- df.plot %>% filter(str_detect(studyID, "Current study"))
+  
+  
+  plt.right <- 
+    ggplot(aes(y = ve_index), data = df.plot) +
+    geom_point(aes(x= VE_mean), shape=15, size=3, data = df.plot) +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.plot)  +
+    geom_segment(aes(x = VE_ub, xend = -25,
+                     y = ve_index, yend = ve_index), data = df.plot.arrow,
+                 arrow = arrow(length = unit(2, "mm"))) +
+    # mark trial as gold squares
+    geom_point(aes(x= VE_mean), shape=15, size=3, data = df.trial, color = "gold2") +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.trial, color = "gold2")  +
+    # mark current study as blue circles
+    geom_point(aes(x= VE_mean), shape=16, size=4.5, data = df.current, color = "#0000CD") +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.current, color = "#0000CD")  +
+    geom_segment(aes(x = VE_ub, xend = -25,
+                     y = ve_index, yend = ve_index), data = df.plot.arrow.current, color = "#0000CD",
+                 arrow = arrow(length = unit(2, "mm"))) +
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+    xlab("Effectiveness of Nirsevimab (%)") +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.ticks.length.y = unit(0, "pt"),
+          axis.line.y = element_blank(),
+          axis.line = element_line(colour = "black"),
+          plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    scale_x_continuous(limits = c(-25, 100),
+                        breaks = c(-25, 0, 25, 50, 75, 100),
+                       labels = c("-25", "0", "25", "50", "75", "100")) +
+    # add shaded areas for current studies
+    geom_rect(data = df.plot.current, aes(xmin = -Inf, xmax = Inf, ymin = as.numeric(ve_index)-0.5, ymax = as.numeric(ve_index) + 0.5), 
+              fill = "grey", alpha = 0.3)
+  
+  layout <- c(
+    area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+    area(t = 1, l = 8, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  )
+  
+  # final plot arrangement
+  plt <- plt.left +   plt.right + plot_layout(design = layout)
+  
+  return(plt)
+  
+  
+  
+}
+
+### functuon to plot VE stratified by time range
+plot_ve_stratified <- function(df.outcome){
+  
+  # first, plot the left panel
+  outcome <- df.outcome$outcome_group[1]
+  df.plot <- df.outcome %>% arrange(VE_mean) %>% dplyr::select(-outcome) %>%
+    mutate(outcome = NA) %>% mutate(time_range_colname = NA) %>%
+    dplyr::select(outcome, time_range_colname, studyID, study_type, country, time_range, time_range_cat, ve_adj, VE_mean, VE_lb, VE_ub)
+  
+  # arrange by full season, peak season, off season
+  df.plot.full <- df.plot %>% filter(time_range_cat == "Full season") %>% dplyr::select(-time_range_cat)
+  df.plot.peak <- df.plot %>% filter(time_range_cat == "Peak months") %>% dplyr::select(-time_range_cat)
+  df.plot.off <- df.plot %>% filter(time_range_cat == "Off-peak months") %>% dplyr::select(-time_range_cat)
+  
+  # add subgroup title row 
+  df.plot.full <- rbind(
+    data.frame(
+      outcome = NA, time_range_colname = "Full season", studyID = NA, study_type = NA, country = NA, time_range = NA, ve_adj = NA, VE_mean = NA, VE_lb = NA, VE_ub = NA
+    ), df.plot.full 
+  )
+  
+  df.plot.peak <- rbind(
+    data.frame(
+      outcome = NA, time_range_colname = "Peak months", studyID = NA, study_type = NA, country = NA, time_range = NA, ve_adj = NA, VE_mean = NA, VE_lb = NA, VE_ub = NA
+    ), df.plot.peak
+  )
+  
+  df.plot.off <- rbind(
+    data.frame(
+      outcome = NA, time_range_colname = "Off-peak months", studyID = NA, study_type = NA, country = NA, time_range = NA, ve_adj = NA, VE_mean = NA, VE_lb = NA, VE_ub = NA
+    ), df.plot.off
+  )
+  
+  df.plot <- rbind(df.plot.full, df.plot.peak, df.plot.off)
+  
+  
+  df.plot <- 
+    rbind(
+      data.frame(
+        outcome = c(outcome,NA),
+        time_range_colname = c(NA, NA),
+        studyID = c(NA, "Study"),
+        study_type = c(NA, "Design"),
+        country = c(NA, "Country"),
+        time_range = c(NA, "Time"),
+        ve_adj = c(NA, "Effectiveness (95%CI)"),
+        VE_mean = c(NA,NA), 
+        VE_lb = c(NA,NA), 
+        VE_ub = c(NA,NA)
+      ),
+      df.plot
+    )
+  
+  # mark if arrows are needed 
+  df.plot <- df.plot %>% 
+    mutate(add_arrow = ifelse(VE_lb < -25, 1, 0)) %>%
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1))) %>%
+    mutate(VE_lb = ifelse(is.na(VE_lb), VE_mean, VE_lb), # some are missing lb and ub
+           VE_ub = ifelse(is.na(VE_ub), VE_mean, VE_ub)) %>%
+    mutate(VE_mean = as.numeric(VE_mean),
+           VE_lb = as.numeric(VE_lb),
+           VE_ub = as.numeric(VE_ub))
+  
+  # plot bold column name separately
+  df.plot.colname <- df.plot %>% filter(studyID == "Study")
+  # plot other rows
+  df.plot.body <- df.plot %>% filter(studyID != "Study" | is.na(studyID))
+  
+  # current study 
+  df.plot.current <- df.plot %>% 
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1))) %>%
+    filter(studyID == "Current study")
+  
+  # define the position of each column
+  x_pos <- c(0.12, 0.27, 0.4, 0.53, 0.65)
+  
+  
+  # making the left plot 
+  plt.left <-
+    ggplot() +
+    # outcome and time range strata name
+    geom_text(aes(x = 0, y = ve_index, label = outcome), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plot) +
+    geom_text(aes(x = 0.015, y = ve_index, label = time_range_colname), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plot) +
+    # plot the colname (bold)
+    geom_text(aes(x = x_pos[1], y = ve_index, label = studyID), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[2], y = ve_index, label = study_type), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = country), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = time_range), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_adj), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    # plot the body (unbold)
+    geom_text(aes(x = x_pos[1], y = ve_index, label = studyID), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[2], y = ve_index, label = study_type), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = country), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = time_range), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, data = df.plot.body) +
+    theme_void() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.line.y = element_blank(),
+          axis.line.x = element_blank(),
+          axis.line = element_line(colour = "black"),
+          plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    coord_cartesian(xlim = c(0, 0.8)) +
+    # add shaded areas for current studies
+    geom_rect(data = df.plot.current, aes(xmin = -Inf, xmax = Inf, ymin = as.numeric(ve_index)-0.5, ymax = as.numeric(ve_index) + 0.5), 
+              fill = "grey", alpha = 0.3)
+  
+  
+  
+  # reverse the index to align righ and left plot
+  df.plot <- df.plot %>% 
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1)))
+  
+  df.plot.arrow <- df.plot %>% filter(add_arrow == 1)
+  df.plot.arrow.current <-   df.plot.arrow %>% filter(str_detect(studyID, "Current study"))
+  df.plot.current <- df.plot %>% filter(str_detect(studyID, "Current study"))
+  
+  # filter out clinical trials and current study
+  df.trial <- df.plot %>% filter(study_type == "trial")
+  df.current <- df.plot %>% filter(str_detect(studyID, "Current study"))
+  
+  
+  plt.right <- 
+    ggplot(aes(y = ve_index), data = df.plot) +
+    geom_point(aes(x= VE_mean), shape=15, size=3, data = df.plot) +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.plot)  +
+    geom_segment(aes(x = VE_ub, xend = -25,
+                     y = ve_index, yend = ve_index), data = df.plot.arrow,
+                 arrow = arrow(length = unit(2, "mm"))) +
+    # mark trial as gold squares
+    geom_point(aes(x= VE_mean), shape=15, size=3, data = df.trial, color = "gold2") +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.trial, color = "gold2")  +
+    # mark current study as blue circles
+    geom_point(aes(x= VE_mean), shape=16, size=4.5, data = df.current, color = "#0000CD") +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.current, color = "#0000CD")  +
+    geom_segment(aes(x = VE_ub, xend = -25,
+                     y = ve_index, yend = ve_index), data = df.plot.arrow.current, color = "#0000CD",
+                 arrow = arrow(length = unit(2, "mm"))) +
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+    xlab("Effectiveness of Nirsevimab (%)") +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.ticks.length.y = unit(0, "pt"),
+          axis.line.y = element_blank(),
+          axis.line = element_line(colour = "black"),
+          plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    scale_x_continuous(limits = c(-25, 100),
+                       breaks = c(-25, 0, 25, 50, 75, 100),
+                       labels = c("-25", "0", "25", "50", "75", "100")) +
+    # add shaded areas for current studies
+    geom_rect(data = df.plot.current, aes(xmin = -Inf, xmax = Inf, ymin = as.numeric(ve_index)-0.5, ymax = as.numeric(ve_index) + 0.5), 
+              fill = "grey", alpha = 0.3)
+  
+  layout <- c(
+    area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+    area(t = 1, l = 8, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  )
+  
+  # final plot arrangement
+  plt <- plt.left +   plt.right + plot_layout(design = layout)
+  
+  return(plt)
+  
+  
+  
+}
+
+
+### functuon to plot VE stratified by time range
+# this function extended axis to -60 rather than -25
+plot_ve_stratified_extend <- function(df.outcome){
+  
+  # first, plot the left panel
+  outcome <- df.outcome$outcome_group[1]
+  df.plot <- df.outcome %>% arrange(VE_mean) %>% dplyr::select(-outcome) %>%
+    mutate(outcome = NA) %>% mutate(time_range_colname = NA) %>%
+    dplyr::select(outcome, time_range_colname, studyID, study_type, country, time_range, time_range_cat, ve_adj, VE_mean, VE_lb, VE_ub)
+  
+  # arrange by full season, peak season, off season
+  df.plot.full <- df.plot %>% filter(time_range_cat == "Full season") %>% dplyr::select(-time_range_cat)
+  df.plot.peak <- df.plot %>% filter(time_range_cat == "Peak months") %>% dplyr::select(-time_range_cat)
+  df.plot.off <- df.plot %>% filter(time_range_cat == "Off-peak months") %>% dplyr::select(-time_range_cat)
+  
+  # add subgroup title row 
+  df.plot.full <- rbind(
+    data.frame(
+      outcome = NA, time_range_colname = "Full season", studyID = NA, study_type = NA, country = NA, time_range = NA, ve_adj = NA, VE_mean = NA, VE_lb = NA, VE_ub = NA
+    ), df.plot.full 
+  )
+  
+  df.plot.peak <- rbind(
+    data.frame(
+      outcome = NA, time_range_colname = "Peak months", studyID = NA, study_type = NA, country = NA, time_range = NA, ve_adj = NA, VE_mean = NA, VE_lb = NA, VE_ub = NA
+    ), df.plot.peak
+  )
+  
+  df.plot.off <- rbind(
+    data.frame(
+      outcome = NA, time_range_colname = "Off-peak months", studyID = NA, study_type = NA, country = NA, time_range = NA, ve_adj = NA, VE_mean = NA, VE_lb = NA, VE_ub = NA
+    ), df.plot.off
+  )
+  
+  df.plot <- rbind(df.plot.full, df.plot.peak, df.plot.off)
+  
+  
+  df.plot <- 
+    rbind(
+      data.frame(
+        outcome = c(outcome,NA),
+        time_range_colname = c(NA, NA),
+        studyID = c(NA, "Study"),
+        study_type = c(NA, "Design"),
+        country = c(NA, "Country"),
+        time_range = c(NA, "Time"),
+        ve_adj = c(NA, "Effectiveness (95%CI)"),
+        VE_mean = c(NA,NA), 
+        VE_lb = c(NA,NA), 
+        VE_ub = c(NA,NA)
+      ),
+      df.plot
+    )
+  
+  # mark if arrows are needed 
+  df.plot <- df.plot %>% 
+    mutate(add_arrow = ifelse(VE_lb < -75, 1, 0)) %>%
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1))) %>%
+    mutate(VE_lb = ifelse(is.na(VE_lb), VE_mean, VE_lb), # some are missing lb and ub
+           VE_ub = ifelse(is.na(VE_ub), VE_mean, VE_ub)) %>%
+    mutate(VE_mean = as.numeric(VE_mean),
+           VE_lb = as.numeric(VE_lb),
+           VE_ub = as.numeric(VE_ub))
+  
+  # plot bold column name separately
+  df.plot.colname <- df.plot %>% filter(studyID == "Study")
+  # plot other rows
+  df.plot.body <- df.plot %>% filter(studyID != "Study" | is.na(studyID))
+  
+  # current study 
+  df.plot.current <- df.plot %>% 
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1))) %>%
+    filter(studyID == "Current study")
+  
+  # define the position of each column
+  x_pos <- c(0.12, 0.27, 0.4, 0.53, 0.65)
+  
+  
+  # making the left plot 
+  plt.left <-
+    ggplot() +
+    # outcome and time range strata name
+    geom_text(aes(x = 0, y = ve_index, label = outcome), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plot) +
+    geom_text(aes(x = 0.015, y = ve_index, label = time_range_colname), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plot) +
+    # plot the colname (bold)
+    geom_text(aes(x = x_pos[1], y = ve_index, label = studyID), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[2], y = ve_index, label = study_type), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = country), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = time_range), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_adj), hjust = 0, fontface= c('bold'), lineheight = .75, data = df.plot.colname) +
+    # plot the body (unbold)
+    geom_text(aes(x = x_pos[1], y = ve_index, label = studyID), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[2], y = ve_index, label = study_type), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[3], y = ve_index, label = country), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[4], y = ve_index, label = time_range), hjust = 0, lineheight = .75, data = df.plot.body) +
+    geom_text(aes(x = x_pos[5], y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, data = df.plot.body) +
+    theme_void() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.line.y = element_blank(),
+          axis.line.x = element_blank(),
+          axis.line = element_line(colour = "black"),
+          plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    coord_cartesian(xlim = c(0, 0.8)) +
+    # add shaded areas for current studies
+    geom_rect(data = df.plot.current, aes(xmin = -Inf, xmax = Inf, ymin = as.numeric(ve_index)-0.5, ymax = as.numeric(ve_index) + 0.5), 
+              fill = "grey", alpha = 0.3)
+  
+  
+  
+  # reverse the index to align righ and left plot
+  df.plot <- df.plot %>% 
+    mutate(ve_index = factor(1:nrow(df.plot), levels = as.character(nrow(df.plot):1)))
+  
+  df.plot.arrow <- df.plot %>% filter(add_arrow == 1)
+  df.plot.arrow.current <-   df.plot.arrow %>% filter(str_detect(studyID, "Current study"))
+  df.plot.current <- df.plot %>% filter(str_detect(studyID, "Current study"))
+  
+  # filter out clinical trials and current study
+  df.trial <- df.plot %>% filter(study_type == "trial")
+  df.current <- df.plot %>% filter(str_detect(studyID, "Current study"))
+  
+  
+  plt.right <- 
+    ggplot(aes(y = ve_index), data = df.plot) +
+    geom_point(aes(x= VE_mean), shape=15, size=3, data = df.plot) +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.plot)  +
+    geom_segment(aes(x = VE_ub, xend = -75,
+                     y = ve_index, yend = ve_index), data = df.plot.arrow,
+                 arrow = arrow(length = unit(2, "mm"))) +
+    # mark trial as gold squares
+    geom_point(aes(x= VE_mean), shape=15, size=3, data = df.trial, color = "gold2") +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.trial, color = "gold2")  +
+    # mark current study as blue circles
+    geom_point(aes(x= VE_mean), shape=16, size=4.5, data = df.current, color = "#0000CD") +
+    geom_linerange(aes(xmin = VE_lb, xmax = VE_ub), data = df.current, color = "#0000CD")  +
+    geom_segment(aes(x = VE_ub, xend = -75,
+                     y = ve_index, yend = ve_index), data = df.plot.arrow.current, color = "#0000CD",
+                 arrow = arrow(length = unit(2, "mm"))) +
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+    xlab("Effectiveness of Nirsevimab (%)") +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.ticks.length.y = unit(0, "pt"),
+          axis.line.y = element_blank(),
+          axis.line = element_line(colour = "black"),
+          plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    scale_x_continuous(limits = c(-75, 100),
+                       breaks = c(-75, -50, -25, 0, 25, 50, 75, 100),
+                       labels = c("-75", "-50", "-25", "0", "25", "50", "75", "100")) +
+    # add shaded areas for current studies
+    geom_rect(data = df.plot.current, aes(xmin = -Inf, xmax = Inf, ymin = as.numeric(ve_index)-0.5, ymax = as.numeric(ve_index) + 0.5), 
+              fill = "grey", alpha = 0.3)
+  
+  layout <- c(
+    area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+    area(t = 1, l = 8, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  )
+  
+  # final plot arrangement
+  plt <- plt.left +   plt.right + plot_layout(design = layout)
+  
+  return(plt)
+  
+  
+  
+}
+
+
+
+
+
 
 
 
