@@ -146,6 +146,35 @@ process_df <- function(df){
   
   # there seems to be individuals not admitted to hospital but had hosp los
   
+  # add confounders dummy variables 
+  df <- df %>% 
+    # recode confounders
+    mutate(cf_birth_weight = birth_weight) %>% # about 25% missing 
+    mutate(cf_age = case_when(age_at_test_in_months_cat_2 == "under 3m" ~ 1,
+                              age_at_test_in_months_cat_2 == "3-6m" ~ 2,
+                              age_at_test_in_months_cat_2 == "6-9m" ~ 3,
+                              age_at_test_in_months_cat_2 == "9-12m" ~ 4,
+                              age_at_test_in_months_cat_2 == "above 1 yo" ~ 5)) %>%
+    mutate(cf_month_tested = case_when(month_when_tested_cat == "Oct-Nov" ~ 1,
+                                       month_when_tested_cat == "Dec-Jan" ~ 2,
+                                       month_when_tested_cat == "Feb-Mar" ~ 3,
+                                       month_when_tested_cat == "April and after" ~ 4
+    )) %>%
+    # convert confounders to dummy variables 
+    mutate(cf_age_1 = ifelse(cf_age == 1, 1, 0),
+           cf_age_2 = ifelse(cf_age == 2, 1, 0),
+           cf_age_3 = ifelse(cf_age == 3, 1, 0),
+           cf_age_4 = ifelse(cf_age == 4, 1, 0), 
+           cf_age_5 = ifelse(cf_age == 5, 1, 0)) %>%
+    mutate(cf_month_tested_1 = ifelse(cf_month_tested == 1, 1, 0),
+           cf_month_tested_2 = ifelse(cf_month_tested == 2, 1, 0),
+           cf_month_tested_3 = ifelse(cf_month_tested == 3, 1, 0),
+           cf_month_tested_4 = ifelse(cf_month_tested == 4, 1, 0)) %>%
+    mutate(cf_insurance_1 = ifelse(insurance_type == "private", 1, 0),
+           cf_insurance_2 = ifelse(insurance_type == "public", 1, 0),
+           cf_insurance_3 = ifelse(insurance_type == "uninsured", 1, 0)) %>%
+    # having at least one risk factor
+    mutate(cf_onerf = ifelse(risk_factor_atleastone == "yes", 1, 0))
   
   return(df)
   
@@ -518,9 +547,10 @@ ve_forest_2rows <- function(df.plot = ve,
   a$ve_adj_lb <- NA
   a$ve_adj_ub <- NA
   
-  a[which(a$n_dash == 1),]$ve_adj_lb <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,1])
-  a[which(a$n_dash == 1),]$ve_adj_ub <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
-  
+  if(1 %in% a$n_dash){
+    a[which(a$n_dash == 1),]$ve_adj_lb <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,1])
+    a[which(a$n_dash == 1),]$ve_adj_ub <- as.numeric(matrix(unlist(strsplit((a[which(a$n_dash == 1),])$V2, "-")), ncol = 2, byrow = T)[,2])
+  }
   # when there is lb < 0 
   # a[which(a$n_dash == 2),]$ve_adj_lb <- - as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,1])
   # a[which(a$n_dash == 2),]$ve_adj_ub <- + as.numeric(matrix(unlist(strsplit(sub(".", "", (a[which(a$n_dash == 2),])$V2), "-")), ncol = 2, byrow = T)[,2])
@@ -639,8 +669,8 @@ ve_forest_2rows <- function(df.plot = ve,
     
   
   layout <- c(
-    area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
-    area(t = 1, l = 8, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+    patchwork::area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+    patchwork::area(t = 1, l = 8, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
   )
   
   # final plot arrangement
@@ -649,6 +679,391 @@ ve_forest_2rows <- function(df.plot = ve,
   return(plt)
   
 }
+
+
+regress_penalized <- function(df.ve, confounders, against){
+  
+  # prepare data 
+  temp <- df.ve %>% dplyr::select(case_control, rsv_mab, confounders)
+  x <- model.matrix(case_control ~ ., temp)[,-1]
+  y <- temp$case_control
+  
+  # Fit model with cross-validation to find optimal lambda
+  set.seed(123)
+  cv_model <- cv.glmnet(x, y, alpha = 1, family = "binomial") # Lasso
+  
+  # Fit final model using best lambda
+  final_model <- glmnet(x, y, alpha = 1, family = "binomial",
+                        lambda = cv_model$lambda.min)
+  
+  
+  # Get VE
+  VE <- round((1-exp(coef(final_model))[2]) * 100, 1) # coefficient for rsv_mab
+  
+  # Get CI of VE through bootstrap
+  set.seed(123)
+  boot_coef <- matrix(NA, nrow=100, ncol=ncol(x))
+  for(i in 1:100) {
+    boot_index <- sample(1:nrow(x), replace=TRUE)
+    boot_fit <- glmnet(x[boot_index,], y[boot_index], 
+                       family="binomial", lambda=cv_model$lambda.min)
+    boot_coef[i,] <- coef(boot_fit)[-1]  # Remove intercept
+  }
+  
+  # Calculate CI
+  VE_ub <- round((1 - exp(apply(boot_coef, 2, quantile, 0.025))[1]) * 100, 1)
+  VE_lb <- round((1 - exp(apply(boot_coef, 2, quantile, 0.975))[1]) * 100, 1)
+  
+  
+  ## fit an unadjust LASSO model (resume)
+  
+  
+  
+  # get number of cases and controls 
+  n_cases_mab <- df.ve %>% filter(rsv_mab == 1 & case_control == 1) %>% nrow()
+  n_cases_nomab <- df.ve %>% filter(rsv_mab == 0 & case_control == 1) %>% nrow()
+  n_controls_mab <- df.ve %>% filter(rsv_mab == 1 & case_control == 0) %>% nrow()
+  n_controls_nomab <- df.ve %>% filter(rsv_mab == 0 & case_control == 0) %>% nrow()
+  
+  df.output <- data.frame(
+    against = against,
+    n_cases_mab = n_cases_mab, 
+    n_cases_nomab = n_cases_nomab,
+    n_controls_mab = n_controls_mab,
+    n_controls_nomab = n_controls_nomab,
+    ve_adj = paste0(VE, " (", VE_lb, ", ", VE_ub, ")")
+  )
+  
+  return(df.output)
+  
+}
+
+
+regress_subgroup <- function(df.ve, confounders, against){
+  
+  # unadjusted 
+  formula <- as.formula(paste(c("case_control ~ rsv_mab"), collapse = " + ")) 
+  model <- glm(formula, data = df.ve, family = binomial)
+  ve.unadj.median <- round((1 - exp(model$coefficients[2])) * 100, 1)
+  ve.unadj.ub <- round((1 - exp(confint(model)[2,][1])) * 100, 1)
+  ve.unadj.lb <- round((1 - exp(confint(model)[2,][2])) * 100, 1)
+  
+  # adjusted
+  formula <- as.formula(paste(c("case_control ~ rsv_mab", confounders), collapse = " + ")) 
+  model <- glm(formula, data = df.ve, family = binomial)
+  ve.adj.median <- round((1 - exp(model$coefficients[2])) * 100, 1)
+  ve.adj.ub <- round((1 - exp(confint(model)[2,][1])) * 100, 1)
+  ve.adj.lb <- round((1 - exp(confint(model)[2,][2])) * 100, 1)
+  
+  # get number of cases and controls 
+  n_cases_mab <- df.ve %>% filter(rsv_mab == 1 & case_control == 1) %>% nrow()
+  n_cases_nomab <- df.ve %>% filter(rsv_mab == 0 & case_control == 1) %>% nrow()
+  n_controls_mab <- df.ve %>% filter(rsv_mab == 1 & case_control == 0) %>% nrow()
+  n_controls_nomab <- df.ve %>% filter(rsv_mab == 0 & case_control == 0) %>% nrow()
+  
+  ve.results <- data.frame(
+    against = against,
+    n_cases_mab = n_cases_mab,
+    n_cases_nomab = n_cases_nomab,
+    n_controls_mab = n_controls_mab,
+    n_controls_nomab = n_controls_nomab,
+    ve_unadj = paste0(ve.unadj.median, " (", ve.unadj.lb, "-", ve.unadj.ub, ")"),
+    ve_adj = paste0(ve.adj.median, " (", ve.adj.lb, "-", ve.adj.ub, ")")
+  ) 
+  
+  return(ve.results)
+  
+}
+
+
+# run through the four main outcomes
+run_subgroup_outcomes <- function(df.subgroup){
+  
+  # against infection
+  df.infection <- df.subgroup %>% mutate(case_control = positive_rsv)
+  ve.infection <- regress_subgroup(df.ve = df.infection, confounders = confounders, against = "infection") 
+  
+  # against ed visit 
+  df.ed <- df.subgroup %>% filter(encounter_type == "outpatient") %>% mutate(case_control = positive_rsv)
+  ve.ed <- regress_subgroup(df.ve = df.ed, confounders = confounders, against = "ed") 
+  
+  # against ed visit 
+  df.hosp <- df.subgroup %>% filter(encounter_type == "inpatient") %>% mutate(case_control = positive_rsv)
+  ve.hosp <- regress_subgroup(df.ve = df.hosp, confounders = confounders, against = "hosp") 
+  
+  # against severe outcomes 
+  df.severe <- df.subgroup %>% filter(icu_admitted == "yes" | highflow_oxygen == 1) %>% mutate(case_control = positive_rsv)
+  ve.severe <- regress_subgroup(df.ve = df.severe, confounders = confounders, against = "severe") 
+  
+  # stack outcomes 
+  ve.results <- rbind(ve.infection, ve.ed, ve.hosp, ve.severe)
+  
+  return(ve.results)
+}
+
+run_subgroup_outcomes_penalized <- function(df.subgroup){
+  
+  # against infection
+  df.infection <- df.subgroup %>% mutate(case_control = positive_rsv)
+  ve.infection <- regress_penalized(df.ve = df.infection, confounders = confounders, against = "infection") 
+  
+  # against ed visit 
+  df.ed <- df.subgroup %>% filter(encounter_type == "outpatient") %>% mutate(case_control = positive_rsv)
+  ve.ed <- regress_penalized(df.ve = df.ed, confounders = confounders, against = "ed") 
+  
+  # against ed visit 
+  df.hosp <- df.subgroup %>% filter(encounter_type == "inpatient") %>% mutate(case_control = positive_rsv)
+  ve.hosp <- regress_penalized(df.ve = df.hosp, confounders = confounders, against = "hosp") 
+  
+  # against severe outcomes 
+  df.severe <- df.subgroup %>% filter(icu_admitted == "yes" | highflow_oxygen == 1) %>% mutate(case_control = positive_rsv)
+  ve.severe <- regress_penalized(df.ve = df.severe, confounders = confounders, against = "severe") 
+  
+  # stack outcomes 
+  ve.results <- rbind(ve.infection, ve.ed, ve.hosp, ve.severe)
+  
+  return(ve.results)
+}
+
+
+
+# convert to plot
+ve_forest_subgroup <- function(df.ve){
+  
+  df.plot <- df.ve %>% 
+    mutate(
+      ve_adj_median = as.numeric(str_extract(ve_adj, "^[0-9.]+")),
+      ve_adj_lower = as.numeric(str_extract(ve_adj, "(?<=\\()[0-9.]+")),
+      ve_adj_upper = as.numeric(str_extract(ve_adj, "(?<=, )[0-9.]+(?=\\))"))
+    )
+  
+  # format the subgroup 
+  subgroups <- unique(df.plot$subgroup)
+  for(sg in subgroups){
+    temp <- df.plot %>% filter(subgroup == sg)
+    df.plot.temp <- rbind(
+      data.frame(ve_adj = NA, strata = NA, subgroup = sg, immunized = NA, unimmunized = NA, ve_adj_median = NA, ve_adj_lower = NA, ve_adj_upper = NA),
+      temp %>% mutate(subgroup = NA)
+    ) %>% dplyr::select(subgroup, strata, immunized, unimmunized, ve_adj, ve_adj_median, ve_adj_lower, ve_adj_upper)
+    
+    if(which(sg == subgroups) == 1){df.plt <- df.plot.temp}
+    else{df.plt <- rbind(df.plt, df.plot.temp)}
+  }
+  
+  # create labels as the first row
+  df.plt <- 
+    rbind(
+      data.frame(subgroup = NA,
+                 strata = NA,
+                 immunized = "\nImmunized\n",
+                 unimmunized = "\nUnimmunized\n",
+                 ve_adj = "\nEffectiveness (95%CI)\n",
+                 ve_adj_median = NA,
+                 ve_adj_lower = NA, 
+                 ve_adj_upper = NA
+      ),
+      df.plt
+    )
+  
+  df.plt <- df.plt %>% 
+    mutate(ve_index = factor(1:nrow(df.plt), levels = as.character(nrow(df.plt):1)))
+  
+  # plot bold column name separately
+  df.plt.colname <- df.plt[1,]
+  # plot other rows
+  df.plt.body <- df.plt[-1,]
+  
+  x_pos <- c(0, 0.02, 0.3, 0.45, 0.68)
+  
+  plt.left <- 
+    ggplot() +
+    # bold colnames
+    geom_text(aes(x = x_pos[1],y = ve_index, label = subgroup), hjust = 0, fontface= c('bold'), lineheight = 0.8, data = df.plt) +
+    geom_text(aes(x = x_pos[2],y = ve_index, label = strata), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    geom_text(aes(x = x_pos[3],y = ve_index, label = immunized), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    geom_text(aes(x = x_pos[4],y = ve_index, label = unimmunized), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    geom_text(aes(x = x_pos[5],y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, fontface= c('bold'), data = df.plt.colname) +
+    # unbold body
+    geom_text(aes(x = x_pos[2],y = ve_index, label = strata), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[3],y = ve_index, label = immunized), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[4],y = ve_index, label = unimmunized), hjust = 0, lineheight = .75, data = df.plt.body) +
+    geom_text(aes(x = x_pos[5],y = ve_index, label = ve_adj), hjust = 0, lineheight = .75, data = df.plt.body) +
+    theme_void() +
+    coord_cartesian(xlim = c(0, 1))
+  
+
+  plt.right <- 
+    ggplot(aes(y = ve_index), data = df.plt) +
+    geom_point(aes(x= ve_adj_median), shape=15, size=3, data = df.plt) +
+    geom_linerange(aes(xmin = ve_adj_lower, xmax = ve_adj_upper), data = df.plt)  +
+    # geom_segment(aes(x = ve_adj_ub, xend = -25,
+    #                  y = ve_index, yend = ve_index), data = df.plt.arrow,
+    #              arrow = arrow(length = unit(2, "mm"))) +
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+    xlab("Effectiveness of Nirsevimab (%)") +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.line.y = element_blank(),
+          axis.line = element_line(colour = "black")) +
+    scale_x_continuous(limits = c(-25, 100),
+                       breaks = c(-25, 0, 25, 50, 75, 100),
+                       labels = c("-25", "0", "25", "50", "75", "100"))  
+    
+    
+    
+    layout <- c(
+      patchwork::area(t = 0, l = 0, b = 30, r = 7), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+      patchwork::area(t = 1, l = 7, b = 30, r = 8)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+    )
+  
+  # final plot arrangement
+  plt <- plt.left +  plt.right + plot_layout(design = layout)
+  
+  return(plt)
+  
+  
+  
+}
+
+
+
+
+# (revision) adjusting for multiple testing
+regress_geeglm <- function(df.ve, confounders, against){
+  
+  # unadjusted 
+  formula <- as.formula(paste(c("case_control ~ rsv_mab"), collapse = " + ")) 
+  model <- geeglm(formula, family = binomial, id = StudyID, data = df.ve, corstr = "exchangeable")
+  ve.unadj.median <- round((1 - exp(model$coefficients[2])) * 100, 1)
+  ve.unadj.ub <- round((1 - exp(confint.default(model)[2,][1])) * 100, 1)
+  ve.unadj.lb <- round((1 - exp(confint.default(model)[2,][2])) * 100, 1)
+  
+  # adjusted
+  formula <- as.formula(paste(c("case_control ~ rsv_mab", confounders), collapse = " + ")) 
+  model <- geeglm(formula, family = binomial, id = StudyID, data = df.ve, corstr = "exchangeable")
+  ve.adj.median <- round((1 - exp(model$coefficients[2])) * 100, 1)
+  ve.adj.ub <- round((1 - exp(confint.default(model)[2,][1])) * 100, 1)
+  ve.adj.lb <- round((1 - exp(confint.default(model)[2,][2])) * 100, 1)
+  
+  # get number of cases and controls 
+  n_cases_mab <- df.ve %>% filter(rsv_mab == 1 & case_control == 1) %>% nrow()
+  n_cases_nomab <- df.ve %>% filter(rsv_mab == 0 & case_control == 1) %>% nrow()
+  n_controls_mab <- df.ve %>% filter(rsv_mab == 1 & case_control == 0) %>% nrow()
+  n_controls_nomab <- df.ve %>% filter(rsv_mab == 0 & case_control == 0) %>% nrow()
+  
+  ve.results <- data.frame(
+    against = against,
+    n_cases_mab = n_cases_mab,
+    n_cases_nomab = n_cases_nomab,
+    n_controls_mab = n_controls_mab,
+    n_controls_nomab = n_controls_nomab,
+    ve_unadj = paste0(ve.unadj.median, " (", ve.unadj.lb, "-", ve.unadj.ub, ")"),
+    ve_adj = paste0(ve.adj.median, " (", ve.adj.lb, "-", ve.adj.ub, ")")
+  ) 
+  
+  return(ve.results)
+  
+}
+
+
+ve_wane_forest <- function(df.plot,
+                           panel_title){
+  
+  # create lebels as the first row 
+  df.plt <- rbind(
+    data.frame(
+      vax_time = "\nWeeks since \nimmunization\n",
+      n_cases = "\nRSV \npositive\n",
+      n_controls = "\nRSV \nnegative\n",
+      VE.adjusted = "\nAdjusted \neffectiveness\n",
+      VE.median = NA, 
+      VE.lb = NA, 
+      VE.ub = NA
+    ),
+    df.plot %>% dplyr::select(-against) %>% dplyr::select(vax_time, n_cases, n_controls, VE.adjusted, VE.median, VE.lb, VE.ub)
+  )
+  
+  df.plt <- df.plt %>% mutate(ve_index = factor(1:nrow(df.plt), levels = as.character(nrow(df.plt):1)))
+  
+  # filter out those lb < -25 and add an arrow in the end 
+  df.plt.arrow <- df.plt %>% filter(VE.lb < -25)
+  
+  # replace lb < -25 --> -25 
+  df.plt <- df.plt %>% mutate(VE.lb = ifelse(VE.lb <= -25, -25, VE.lb))
+  
+  # plot bold column name separately 
+  df.plt.colname <- df.plt %>% filter(n_cases == "\nRSV \npositive\n")
+  
+  # plot other rows (body)
+  df.plt.body <- df.plt[-1,]
+  
+  # plot first column without colname 
+  df.plt.firstcolumn <- df.plt %>% 
+    mutate(vax_time = ifelse(vax_time == "\nWeeks since \nimmunization\n", NA, vax_time))
+  
+  x_pos <- c(0, 0.3, 0.5, 0.7)
+  text_size = 5
+  
+  lineheight_body <- 0.6
+  lineheight_colname <- 0.8
+  
+  # plot the left plot (text)
+  plt.left <- 
+    ggplot() +
+    # bold colnames
+    geom_text(aes(x = x_pos[1],y = ve_index, label = vax_time), hjust = 0, lineheight = lineheight_colname, data = df.plt.firstcolumn, size = text_size) +
+    geom_text(aes(x = x_pos[1],y = ve_index, label = vax_time), hjust = 0, fontface= c('bold'), lineheight = lineheight_colname, data = df.plt.colname, size = text_size) +
+    geom_text(aes(x = x_pos[2],y = ve_index, label = n_cases), hjust = 0, lineheight = lineheight_colname, fontface= c('bold'), data = df.plt.colname, size = text_size) +
+    geom_text(aes(x = x_pos[3],y = ve_index, label = n_controls), hjust = 0, lineheight = lineheight_colname, fontface= c('bold'), data = df.plt.colname, size = text_size) +
+    geom_text(aes(x = x_pos[4],y = ve_index, label = VE.adjusted), hjust = 0, lineheight = lineheight_colname, fontface= c('bold'), data = df.plt.colname, size = text_size) +
+    # unbold body
+    geom_text(aes(x = x_pos[2],y = ve_index, label = n_cases), hjust = 0, lineheight = lineheight_body, data = df.plt.body, size = text_size) +
+    geom_text(aes(x = x_pos[3],y = ve_index, label = n_controls), hjust = 0, lineheight = lineheight_body, data = df.plt.body, size = text_size) +
+    geom_text(aes(x = x_pos[4],y = ve_index, label = VE.adjusted), hjust = 0, lineheight = lineheight_body, data = df.plt.body, size = text_size) +
+    theme_void() +
+    coord_cartesian(xlim = c(0, 1)) +
+    ggtitle(panel_title) +
+    theme(title = element_text(size = 15))
+  
+  plt.right <- 
+    ggplot(aes(y = ve_index), data = df.plt) +
+    geom_point(aes(x= VE.median), shape=15, size=3, data = df.plt) +
+    geom_linerange(aes(xmin = VE.lb, xmax = VE.ub), data = df.plt)  +
+    geom_segment(aes(x = VE.ub, xend = -25,
+                     y = ve_index, yend = ve_index), data = df.plt.arrow,
+                 arrow = arrow(length = unit(2, "mm"))) +
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+    xlab("Effectiveness (%)") +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          axis.title.x = element_text(size = 15), 
+          axis.ticks.y=element_blank(),
+          axis.line.y = element_blank(),
+          axis.line = element_line(colour = "black")) +
+    scale_x_continuous(limits = c(-25, 100),
+                       breaks = c(-25, 0, 25, 50, 75, 100),
+                       labels = c("-25", "0", "25", "50", "75", "100")) 
+  
+  layout <- c(
+    patchwork::area(t = 0, l = 0, b = 30, r = 6.5), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+    patchwork::area(t = 1, l = 7, b = 30, r = 9)  # right plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  )
+  
+  # final plot arrangement
+  plt <- plt.left +  plt.right + plot_layout(design = layout)
+  
+  return(plt)
+  
+  
+}
+
 
 
 ## function to compare dose-specific VE
@@ -1697,7 +2112,297 @@ plot_ve_stratified_extend <- function(df.outcome){
 
 
 
+#################################################################################
+#### Processing the data from 24/25 season
+#################################################################################
+process_df_2425 <- function(df){
+  
+  # add/recode some variables 
+  
+  # month when tested and age when tested 
+  df <- df %>% 
+    mutate(month_when_tested = as.character(month(collection_date, label = T))) %>% 
+    mutate(month_when_tested = ifelse(month_when_tested == "Sep", "Oct", month_when_tested)) %>%
+    # age when tested (6m interval)
+    mutate(age_at_test_in_months_cat = case_when(
+      age_at_test_in_months < 6 ~ "under 6m",
+      age_at_test_in_months >= 6 & age_at_test_in_months < 12 ~ "6-12m",
+      age_at_test_in_months >= 12 ~ "above 1 yo" 
+    )) %>%
+    # age when tested (3m interval)
+    mutate(age_at_test_in_months_cat_2 = case_when(
+      age_at_test_in_months < 3 ~ "under 3m",
+      age_at_test_in_months >= 3 & age_at_test_in_months < 6 ~ "3-6m",
+      age_at_test_in_months >= 6 & age_at_test_in_months < 9 ~ "6-9m",
+      age_at_test_in_months >= 9 & age_at_test_in_months < 12 ~ "9-12m",
+      age_at_test_in_months >= 12 ~ "above 1 yo" 
+    )) %>%
+    mutate(risk_factor_atleastone = case_when(risk_factor_atleastone == 1 ~ "yes",
+                                              risk_factor_atleastone == 0 ~ "no")) %>% 
+    mutate(across(c(risk_factor_anemia, 
+                    risk_factor_pulmonary,
+                    risk_factor_cardiac,
+                    risk_factor_immunodeficiency,
+                    risk_factor_down,
+                    #risk_factor_small_for_gestage # this has values of 1 0 NA
+    ), ~ ifelse(is.na(.), "no", "yes"))) %>%
+    mutate(age_at_test_in_months_cat = factor(age_at_test_in_months_cat,
+                                              levels = c("under 6m",
+                                                         "6-12m",
+                                                         "above 1 yo"))) %>%
+    mutate(age_at_test_in_months_cat_2 = factor(age_at_test_in_months_cat_2,
+                                                levels = c("under 3m",
+                                                           "3-6m",
+                                                           "6-9m",
+                                                           "9-12m",
+                                                           "above 1 yo"))) %>% 
+    mutate(race_ethnicity = factor(race_ethnicity,
+                                   levels = c("Hispanic",
+                                              "White non-Hispanic",
+                                              "Black non-Hispanic",
+                                              "Other non-Hispanic",
+                                              "unknown")))
+  
 
+  # classify time since mab to testing 
+  df <- df %>% 
+    # 2-month interval
+    mutate(days_btw_mab_collection_cat = 
+             case_when(days_btw_mab_collection < 0 & days_btw_mab_collection > -60 ~ "0-2 months", 
+                       days_btw_mab_collection <= -60 & days_btw_mab_collection > -120 ~ "2-4 months",
+                       days_btw_mab_collection <= -120 ~ "4 months +",
+                       is.na(days_btw_mab_collection) | days_btw_mab_collection >= 0 ~ "no mAb")) %>%
+    mutate(days_btw_mab_collection_cat = factor(days_btw_mab_collection_cat,
+                                                levels = c("no mAb",
+                                                           "0-2 months",
+                                                           "2-4 months",
+                                                           "4 months +"))) %>%
+    # 3-months interval
+    mutate(days_btw_mab_collection_cat_2 = 
+             case_when(days_btw_mab_collection < 0 & days_btw_mab_collection > -90 ~ "0-3 months", 
+                       days_btw_mab_collection <= -90 & days_btw_mab_collection > -180 ~ "3-6 months",
+                       days_btw_mab_collection <= -180 ~ "6 months +", 
+                       is.na(days_btw_mab_collection) | days_btw_mab_collection >= 0 ~ "no mAb")) %>%
+    mutate(days_btw_mab_collection_cat_2 = factor(days_btw_mab_collection_cat_2,
+                                                  levels = c("no mAb",
+                                                             "0-3 months",
+                                                             "3-6 months",
+                                                             "6 months +"))) %>%
+    # 1 months interval
+    mutate(days_btw_mab_collection_cat_3 = 
+             case_when(days_btw_mab_collection < 0 & days_btw_mab_collection > -30 ~ "0-1 months", 
+                       days_btw_mab_collection <= -30 & days_btw_mab_collection > -60 ~ "1-2 months",
+                       days_btw_mab_collection <= -60 & days_btw_mab_collection > -90 ~ "2-3 months",
+                       days_btw_mab_collection <= -90 & days_btw_mab_collection > -120 ~ "3-4 months",
+                       days_btw_mab_collection <= -120 ~ "4 months +",
+                       is.na(days_btw_mab_collection) | days_btw_mab_collection >= 0 ~ "no mAb")) %>%
+    mutate(days_btw_mab_collection_cat_3 = factor(days_btw_mab_collection_cat_3,
+                                                  levels = c("no mAb",
+                                                             "0-1 months",
+                                                             "1-2 months",
+                                                             "2-3 months",
+                                                             "3-4 months",
+                                                             "4 months +"))) %>%
+    mutate(weeks_btw_mab_collection_cat = 
+             case_when(
+               days_btw_mab_collection < 0 & days_btw_mab_collection > -14 ~ "(0, 2)",
+               days_btw_mab_collection <= -14 & days_btw_mab_collection > -14*2 ~ "[2, 4)",
+               days_btw_mab_collection <= -14*2 & days_btw_mab_collection > -14*3 ~ "[4, 6)",
+               days_btw_mab_collection <= -14*3 & days_btw_mab_collection > -14*4 ~ "[6, 8)",
+               days_btw_mab_collection <= -14*4 & days_btw_mab_collection > -14*5 ~ "[8, 10)",
+               days_btw_mab_collection <= -14*5 & days_btw_mab_collection > -14*6 ~ "[10, 12)",
+               days_btw_mab_collection <= -14*6 & days_btw_mab_collection > -14*7 ~ "[12, 14)",
+               days_btw_mab_collection <= -14*7 & days_btw_mab_collection > -14*8 ~ "[14, 16)",
+               days_btw_mab_collection <= -14*8 ~ "[16, )",
+               is.na(days_btw_mab_collection) | days_btw_mab_collection >= 0 ~ "no mAb"
+             )) %>% 
+    mutate(weeks_btw_mab_collection_cat = factor(weeks_btw_mab_collection_cat,
+                                                 levels = c("no mAb",
+                                                            "(0, 2)", "[2, 4)", "[4, 6)", "[6, 8)",
+                                                            "[8, 10)", "[10, 12)", "[12, 14)", "[14, 16)",
+                                                            "[16, )"
+                                                 ))) 
+
+  
+  
+  
+  # group month_when_tested into fewer groups
+  df <- df %>% 
+    mutate(month_when_tested_cat = case_when(
+      collection_date >= as.Date("2024-9-30") & collection_date <= as.Date("2024-11-30") ~ "Oct-Nov",
+      collection_date >= as.Date("2024-12-1") & collection_date <= as.Date("2025-1-31") ~ "Dec-Jan",
+      collection_date >= as.Date("2025-2-1") & collection_date <= as.Date("2025-3-31") ~ "Feb-Mar",
+      collection_date >= as.Date("2025-4-1")  ~ "April and after"
+    )) %>% 
+    mutate(month_when_tested_cat = factor(month_when_tested_cat,
+                                          levels = c("Oct-Nov", "Dec-Jan", "Feb-Mar","April and after")))
+  
+  
+  # dosage 
+  df <- df %>% 
+    mutate(rsv_mab_dose = case_when(rsv_mab_dose == 50 ~ "50mg",
+                                    rsv_mab_dose == 100 ~ "100mg",
+                                    TRUE ~ "no mAb"))
+  
+  
+  # oxygen support (assume those without oxygen information are those without oxygen support)
+  # df <- df %>% 
+  #   mutate(highflow_oxygen = ifelse(is.na(highflow_oxygen), 0, highflow_oxygen))
+  
+  # there seems to be individuals not admitted to hospital but had hosp los
+  
+  # add confounders dummy variables 
+  df <- df %>% 
+    # recode confounders
+    mutate(cf_birth_weight = birth_weight) %>% # about 25% missing 
+    mutate(cf_age = case_when(age_at_test_in_months_cat_2 == "under 3m" ~ 1,
+                              age_at_test_in_months_cat_2 == "3-6m" ~ 2,
+                              age_at_test_in_months_cat_2 == "6-9m" ~ 3,
+                              age_at_test_in_months_cat_2 == "9-12m" ~ 4,
+                              age_at_test_in_months_cat_2 == "above 1 yo" ~ 5)) %>%
+    mutate(cf_month_tested = case_when(month_when_tested_cat == "Oct-Nov" ~ 1,
+                                       month_when_tested_cat == "Dec-Jan" ~ 2,
+                                       month_when_tested_cat == "Feb-Mar" ~ 3,
+                                       month_when_tested_cat == "April and after" ~ 4
+    )) %>%
+    # convert confounders to dummy variables 
+    mutate(cf_age_1 = ifelse(cf_age == 1, 1, 0),
+           cf_age_2 = ifelse(cf_age == 2, 1, 0),
+           cf_age_3 = ifelse(cf_age == 3, 1, 0),
+           cf_age_4 = ifelse(cf_age == 4, 1, 0), 
+           cf_age_5 = ifelse(cf_age == 5, 1, 0)) %>%
+    mutate(cf_month_tested_1 = ifelse(cf_month_tested == 1, 1, 0),
+           cf_month_tested_2 = ifelse(cf_month_tested == 2, 1, 0),
+           cf_month_tested_3 = ifelse(cf_month_tested == 3, 1, 0),
+           cf_month_tested_4 = ifelse(cf_month_tested == 4, 1, 0)) %>%
+    mutate(cf_insurance_1 = ifelse(insurance_type == "private", 1, 0),
+           cf_insurance_2 = ifelse(insurance_type == "public", 1, 0),
+           cf_insurance_3 = ifelse(insurance_type == "uninsured", 1, 0)) %>%
+    # having at least one risk factor
+    mutate(cf_onerf = ifelse(risk_factor_atleastone == "yes", 1, 0))
+  
+  return(df)
+  
+}
+
+
+# function to process posterior samples in the waning VE analysis 
+process_waning_samples <- function(samples, 
+                                   outcome,
+                                   iterations){
+  
+  post.chain1 <- as.data.frame(as.matrix(samples[[1]]))  
+  post.chain2 <- as.data.frame(as.matrix(samples[[2]])) 
+  post.chain3 <- as.data.frame(as.matrix(samples[[3]])) 
+  post.allchains <- as.data.frame(bind_rows(post.chain1, post.chain2, post.chain3)) 
+  
+  ve.median.1 <- round((1 - exp(as.numeric(median(post.allchains$beta1))))*100,1)
+  ve.lb.1 <- round((1 - exp(as.numeric(quantile(post.allchains$beta1, 0.975)))) *100,1)
+  ve.ub.1 <- round((1 - exp(as.numeric(quantile(post.allchains$beta1, 0.025))))*100, 1)
+  
+  ve.median.2 <- round((1 - exp(as.numeric(median(post.allchains$beta2))))*100,1)
+  ve.lb.2 <- round((1 - exp(as.numeric(quantile(post.allchains$beta2, 0.975)))) *100,1)
+  ve.ub.2 <- round((1 - exp(as.numeric(quantile(post.allchains$beta2, 0.025))))*100, 1)
+  
+  ve.median.3 <- round((1 - exp(as.numeric(median(post.allchains$beta3))))*100,1)
+  ve.lb.3 <- round((1 - exp(as.numeric(quantile(post.allchains$beta3, 0.975)))) *100,1)
+  ve.ub.3 <- round((1 - exp(as.numeric(quantile(post.allchains$beta3, 0.025))))*100, 1)
+  
+  ve.median.4 <- round((1 - exp(as.numeric(median(post.allchains$beta4))))*100,1)
+  ve.lb.4 <- round((1 - exp(as.numeric(quantile(post.allchains$beta4, 0.975)))) *100,1)
+  ve.ub.4 <- round((1 - exp(as.numeric(quantile(post.allchains$beta4, 0.025))))*100, 1)
+  
+  ve.median.5 <- round((1 - exp(as.numeric(median(post.allchains$beta5))))*100,1)
+  ve.lb.5 <- round((1 - exp(as.numeric(quantile(post.allchains$beta5, 0.975)))) *100,1)
+  ve.ub.5 <- round((1 - exp(as.numeric(quantile(post.allchains$beta5, 0.025))))*100, 1)
+  
+  ve.median.6 <- round((1 - exp(as.numeric(median(post.allchains$beta6))))*100,1)
+  ve.lb.6 <- round((1 - exp(as.numeric(quantile(post.allchains$beta6, 0.975)))) *100,1)
+  ve.ub.6 <- round((1 - exp(as.numeric(quantile(post.allchains$beta6, 0.025))))*100, 1)
+  
+  ve.median.7 <- round((1 - exp(as.numeric(median(post.allchains$beta7))))*100,1)
+  ve.lb.7 <- round((1 - exp(as.numeric(quantile(post.allchains$beta7, 0.975)))) *100,1)
+  ve.ub.7 <- round((1 - exp(as.numeric(quantile(post.allchains$beta7, 0.025))))*100, 1)
+  
+  ve.median.8 <- round((1 - exp(as.numeric(median(post.allchains$beta8))))*100,1)
+  ve.lb.8 <- round((1 - exp(as.numeric(quantile(post.allchains$beta8, 0.975)))) *100,1)
+  ve.ub.8 <- round((1 - exp(as.numeric(quantile(post.allchains$beta8, 0.025))))*100, 1)
+  
+  ve.median.9 <- round((1 - exp(as.numeric(median(post.allchains$beta9))))*100,1)
+  ve.lb.9 <- round((1 - exp(as.numeric(quantile(post.allchains$beta9, 0.975)))) *100,1)
+  ve.ub.9 <- round((1 - exp(as.numeric(quantile(post.allchains$beta9, 0.025))))*100, 1)
+  
+  
+  # look at the result
+  ve.biwkinterval <-
+    data.frame(
+      against = rep(outcome, 10),
+      vax_time = c("not vaccinated",
+                   "(0, 2)",
+                   "[2, 4)",
+                   "[4, 6)",
+                   "[6, 8)",
+                   "[8, 10)",
+                   "[10, 12)",
+                   "[12, 14)",
+                   "[14, 16)",
+                   "[16, )"),
+      VE.adjusted = c(
+        "REF",
+        paste0(ve.median.1, " (", ve.lb.1, "-", ve.ub.1, ")"),
+        paste0(ve.median.2, " (", ve.lb.2, "-", ve.ub.2, ")"),
+        paste0(ve.median.3, " (", ve.lb.3, "-", ve.ub.3, ")"),
+        paste0(ve.median.4, " (", ve.lb.4, "-", ve.ub.4, ")"),
+        paste0(ve.median.5, " (", ve.lb.5, "-", ve.ub.5, ")"),
+        paste0(ve.median.6, " (", ve.lb.6, "-", ve.ub.6, ")"),
+        paste0(ve.median.7, " (", ve.lb.7, "-", ve.ub.7, ")"),
+        paste0(ve.median.8, " (", ve.lb.8, "-", ve.ub.8, ")"),
+        paste0(ve.median.9, " (", ve.lb.9, "-", ve.ub.9, ")")
+      )
+    ) %>%
+    cbind(
+      table(df.jags$weeks_btw_mab_collection_cat, df.jags$case_control) %>%
+        matrix(ncol = 2)
+    ) %>%
+    dplyr::rename(n_cases = `2`, n_controls = `1`)
+  
+  # for plotting
+  df.ve.biwkinterval <-
+    data.frame(
+      against = rep(outcome, 9),
+      vax_time = c("(0, 2)",
+                   "[2, 4)",
+                   "[4, 6)",
+                   "[6, 8)",
+                   "[8, 10)",
+                   "[10, 12)",
+                   "[12, 14)",
+                   "[14, 16)",
+                   "[16, )"),
+      VE.median = c(ve.median.1, ve.median.2, ve.median.3, ve.median.4, ve.median.5, ve.median.6,
+                    ve.median.7, ve.median.8, ve.median.9),
+      VE.lb = c(ve.lb.1, ve.lb.2, ve.lb.3, ve.lb.4, ve.lb.5,
+                ve.lb.6, ve.lb.7, ve.lb.8, ve.lb.9),
+      VE.ub = c(ve.ub.1, ve.ub.2, ve.ub.3, ve.ub.4, ve.ub.5,
+                ve.ub.6, ve.ub.7, ve.ub.8, ve.ub.9)
+    )
+  
+  # for traceplot
+  post_traceplot <- rbind(
+    post.chain1 %>% mutate(chain = 1, iter = 1:iterations),
+    post.chain2 %>% mutate(chain = 2, iter = 1:iterations),
+    post.chain3 %>% mutate(chain = 3, iter = 1:iterations)
+  ) %>% mutate(outcome = outcome)
+  
+  result.list <- list(
+    ve.biwkinterval = ve.biwkinterval, # VE summary
+    df.ve.biwkinterval = df.ve.biwkinterval, # for plotting VE
+    post = post_traceplot # for plotting traceplot
+  )
+  
+  return(result.list)
+  
+}
 
 
 
